@@ -21,6 +21,8 @@ if (!builder.Environment.IsDevelopment())
 // Каталог для файлу бази (напр. /home/data на Azure, який зберігається між перезапусками)
 var connectionString = config.GetConnectionString("Default") ?? "Data Source=schoolbuddy.db";
 var usePostgres = DatabaseSetup.IsPostgres(connectionString);
+if (!usePostgres && !builder.Environment.IsDevelopment() && !connectionString.TrimStart().StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("ConnectionStrings__Default must be a PostgreSQL URL (postgresql://user:password@host/db) or a SQLite 'Data Source=...' string.");
 if (!usePostgres)
 {
     var dbFile = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connectionString).DataSource;
