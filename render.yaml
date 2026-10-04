@@ -1,0 +1,30 @@
+# Render Blueprint: сайт SchoolBuddy (Docker). Базу даних (Postgres) беремо безкоштовну на Neon.
+services:
+  - type: web
+    name: schoolbuddy
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: PORT
+        value: "10000"
+      # Рядок підключення з Neon (postgresql://...), вставляється в панелі Render
+      - key: ConnectionStrings__Default
+        sync: false
+      # Секрети генеруються Render автоматично
+      - key: Jwt__Key
+        generateValue: true
+      - key: Forum__Salt
+        generateValue: true
+      # Твоя пошта @infis.cz — отримає роль адміна
+      - key: School__Admins__0
+        sync: false
+      - key: Demo__Enabled
+        value: "true"
+      # Пошта: ключ Brevo API і адреса відправника, підтверджена в Brevo
+      - key: Brevo__ApiKey
+        sync: false
+      - key: Smtp__From
+        sync: false

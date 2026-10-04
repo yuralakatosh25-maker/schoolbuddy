@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f4f4f2" />
+    <script>
+      // Тема ставиться до завантаження React, щоб не було спалаху іншої теми
+      (function () {
+        var t = 'system'
+        try { t = localStorage.getItem('sb.theme') || 'system' } catch (e) {}
+        var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+        document.querySelector('meta[name="theme-color"]').content = dark ? '#0e0f11' : '#f4f4f2'
+      })()
+    </script>
+    <meta name="description" content="SchoolBuddy — peer mentoring for SŠINFIS students" />
+    <title>SchoolBuddy</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

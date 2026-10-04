@@ -1,0 +1,31 @@
+# У цій папці лежать і інші навчальні файли — у репозиторій потрапляє лише SchoolBuddy
+/*
+!/.gitignore
+!/README.md
+!/DEPLOY.md
+!/Dockerfile
+!/.dockerignore
+!/render.yaml
+!/frontend/
+!/SchuoolBuddy.API/
+
+# Залежності та збірки
+node_modules/
+dist/
+dev-dist/
+bin/
+obj/
+SchuoolBuddy.API/wwwroot/
+
+# Локальна база й секрети
+*.db
+*.db-shm
+*.db-wal
+appsettings.*.local.json
+.env*
+
+# Редактори
+.vs/
+.vscode/
+.idea/
+*.user

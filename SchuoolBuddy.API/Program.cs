@@ -1,0 +1,116 @@
+using System.Security.Claims;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using SchoolBuddy.API.Controllers;
+using SchoolBuddy.API.Models;
+using SchoolBuddy.API.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+var config = builder.Configuration;
+
+// У продакшні заглушки секретів неприпустимі — їх треба задати змінними середовища
+if (!builder.Environment.IsDevelopment())
+{
+    foreach (var key in new[] { "Jwt:Key", "Forum:Salt" })
+        if (string.IsNullOrWhiteSpace(config[key]) || config[key]!.StartsWith("change-me"))
+            throw new InvalidOperationException($"Set a real secret for '{key}' (env var {key.Replace(":", "__")}).");
+}
+
+// Каталог для файлу бази (напр. /home/data на Azure, який зберігається між перезапусками)
+var connectionString = config.GetConnectionString("Default") ?? "Data Source=schoolbuddy.db";
+var usePostgres = DatabaseSetup.IsPostgres(connectionString);
+if (!usePostgres)
+{
+    var dbFile = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connectionString).DataSource;
+    var dbDir = Path.GetDirectoryName(Path.GetFullPath(dbFile));
+    if (!string.IsNullOrEmpty(dbDir)) Directory.CreateDirectory(dbDir);
+}
+
+builder.Services.AddDbContext<AppDbContext>(options => DatabaseSetup.Configure(options, connectionString));
+
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<Moderation>();
+builder.Services.AddSingleton<AnonHasher>();
+builder.Services.AddScoped<TokenService>();
+builder.Services.AddScoped<EmailSender>();
+builder.Services.AddScoped<NotificationService>();
+builder.Services.AddScoped<Gamification>();
+builder.Services.AddScoped<UserCleanup>();
+builder.Services.AddScoped<ScheduleService>();
+builder.Services.AddScoped<SosService>();
+builder.Services.AddScoped<ConnectionService>();
+builder.Services.AddScoped<DemoSeeder>();
+builder.Services.AddHostedService<ReminderService>();
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = config["Jwt:Issuer"],
+            ValidAudience = config["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(
+                config["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key is not configured"))),
+        };
+        // Токен видаленого або заблокованого користувача більше не діє
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async ctx =>
+            {
+                var db = ctx.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var id = int.TryParse(ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier), out var v) ? v : 0;
+                var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id);
+                if (user == null || user.IsBlocked) ctx.Fail("user unavailable");
+            },
+        };
+    });
+builder.Services.AddAuthorization();
+
+builder.Services.AddControllers().AddJsonOptions(o =>
+    o.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles);
+
+builder.Services.AddCors(options => options.AddPolicy("Frontend", policy =>
+    policy.WithOrigins(config.GetSection("Cors:Origins").Get<string[]>() ?? ["http://localhost:5173"])
+        .AllowAnyHeader().AllowAnyMethod()));
+
+// Хостинги (Render, Fly тощо) повідомляють порт змінною PORT
+if (Environment.GetEnvironmentVariable("PORT") is { Length: > 0 } port)
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+
+var app = builder.Build();
+
+// Міграції + довідкові та демо-дані при старті
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    // SQLite (локально) оновлюється міграціями; для PostgreSQL схему створює EnsureCreated
+    // (міграції в проєкті написані під SQLite).
+    if (usePostgres) db.Database.EnsureCreated();
+    else db.Database.Migrate();
+    var seeder = scope.ServiceProvider.GetRequiredService<DemoSeeder>();
+    await seeder.SeedReferenceAsync();
+    await seeder.EnsureTimelineAsync();
+    if (config.GetValue("Demo:Enabled", true)) await seeder.SeedDemoAsync();
+}
+
+app.UseCors("Frontend");
+
+// Зібраний фронтенд (wwwroot) роздається тим самим сервером
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.MapGet("/api/health", () => Results.Ok(new { ok = true }));
+// Невідомі /api/... — 404, усе інше (/invite/..., /partner, /u/...) — сторінка застосунку
+app.Map("/api/{**rest}", () => Results.NotFound(new { error = "not_found" }));
+app.MapFallbackToFile("index.html");
+
+app.Run();

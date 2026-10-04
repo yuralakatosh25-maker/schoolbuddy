@@ -1,0 +1,17 @@
+@api = http://localhost:5199
+
+### Вхід у демо-акаунт ментора
+POST {{api}}/api/demo/login
+Content-Type: application/json
+
+{ "role": "mentor" }
+
+### Запит коду на шкільну пошту
+POST {{api}}/api/auth/request-code
+Content-Type: application/json
+
+{ "email": "novak@infis.cz" }
+
+### Партнерський API: профіль закладу
+GET {{api}}/api/partner/me
+X-Partner-Key: klatovka-demo-key

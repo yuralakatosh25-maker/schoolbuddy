@@ -1,0 +1,12 @@
+**/node_modules
+**/bin
+**/obj
+**/dist
+SchuoolBuddy.API/wwwroot
+*.db
+*.db-shm
+*.db-wal
+_backup*
+.git
+.vs
+.claude

@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+/* Дві теми: світла (монохром, чорні хвилі) і темна (графіт).
+   Утиліти Tailwind посилаються на CSS-змінні, тож тема перемикається атрибутом data-theme на <html>. */
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --font-display: "Oswald Variable", "Geist Variable", sans-serif;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --color-info: var(--info);
+  --color-wave: var(--wave-1);
+  --color-on-wave: var(--on-wave);
+  --color-on-wave-muted: var(--on-wave-muted);
+
+  --animate-in: fade-up 0.22s ease-out both;
+  --animate-push: push-in 0.3s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+  --animate-sheet: sheet-up 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes push-in {
+    from { transform: translateX(100%); }
+    to { transform: none; }
+  }
+  @keyframes sheet-up {
+    from { transform: translateY(100%); }
+    to { transform: none; }
+  }
+}
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #e4e4e1;
+  --surface: #f4f4f2;
+  --card: #ffffff;
+  --raised: #ececE9;
+  --line: #e2e2de;
+  --line-strong: #cbcbc6;
+  --ink: #111112;
+  --muted: #616167;
+  --faint: #9b9ba0;
+  --accent: #111112;
+  --accent-ink: #ffffff;
+  --danger: #e5484d;
+  --warn: #b97a0c;
+  --ok: #1a9466;
+  --info: #3466d1;
+  --wave-1: #111112;
+  --wave-2: #2b2b2d;
+  --wave-3: #48484b;
+  --on-wave: #ffffff;
+  --on-wave-muted: #a9a9ad;
+  --avatar-bg: 90%;
+  --avatar-fg: 32%;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 14px rgb(0 0 0 / 0.04);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #070708;
+  --surface: #0e0f11;
+  --card: #16171a;
+  --raised: #1d1f23;
+  --line: #24262a;
+  --line-strong: #34373c;
+  --ink: #f2f2f0;
+  --muted: #8d9097;
+  --faint: #5d6067;
+  --accent: #f2f2f0;
+  --accent-ink: #0b0b0c;
+  --danger: #ff6369;
+  --warn: #f5b74f;
+  --ok: #4cc38a;
+  --info: #84a9ff;
+  --wave-1: #222429;
+  --wave-2: #1a1c20;
+  --wave-3: #141518;
+  --on-wave: #f2f2f0;
+  --on-wave-muted: #8d9097;
+  --avatar-bg: 21%;
+  --avatar-fg: 78%;
+  --shadow: none;
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    font-feature-settings: "ss01", "cv11";
+    transition: background-color .2s;
+  }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; }
+  input, textarea, select { font: inherit; color: inherit; }
+  ::selection { background: color-mix(in srgb, var(--ink) 18%, transparent); }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 6px; }
+}
+
+@layer components {
+  .scroll-area { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+  .scroll-area::-webkit-scrollbar { display: none; }
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  .field {
+    width: 100%;
+    background: var(--raised);
+    border: 1px solid transparent;
+    border-radius: 12px;
+    padding: 11px 13px;
+    font-size: 15px;
+    transition: border-color .15s, background-color .15s;
+  }
+  .field::placeholder { color: var(--faint); }
+  .field:focus { outline: none; border-color: var(--line-strong); background: var(--card); }
+  select.field { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%238c8c92' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
+  select.field option { background: var(--card); }
+  [data-theme="dark"] input[type="datetime-local"].field::-webkit-calendar-picker-indicator,
+  [data-theme="dark"] input[type="date"].field::-webkit-calendar-picker-indicator,
+  [data-theme="dark"] input[type="time"].field::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+
+  .card-shadow { box-shadow: var(--shadow); }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .pb-safe { padding-bottom: max(env(safe-area-inset-bottom), 0px); }
+}
+
+/* Leaflet: у світлій темі сіра мапа, у темній — інвертована */
+.leaflet-container { background: var(--raised); font-family: var(--font-sans); }
+.leaflet-tile-pane { filter: grayscale(1) contrast(1.02) brightness(1.03); }
+[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.88) saturate(0.3); }
+.leaflet-control-attribution { background: color-mix(in srgb, var(--card) 85%, transparent) !important; color: var(--faint) !important; font-size: 10px; }
+.leaflet-control-attribution a { color: var(--muted) !important; }
+.leaflet-bar a { background: var(--card) !important; color: var(--ink) !important; border-color: var(--line) !important; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--card); color: var(--ink); border: 1px solid var(--line); box-shadow: none; }
+.leaflet-popup-content { margin: 10px 12px; font-size: 13px; }
