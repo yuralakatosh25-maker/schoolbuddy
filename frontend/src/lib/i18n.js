@@ -496,7 +496,7 @@ const dict = {
   tier_3: ['Платина', 'Platina', 'Platinum'],
   tierProgress: ['{n} новачків приведено або закріплено · до наступного рівня {next}', '{n} přivedených či svěřených nováčků · další úroveň od {next}', '{n} students brought or mentored · next tier at {next}'],
   tierMax: ['Максимальний рівень', 'Maximální úroveň', 'Top tier reached'],
-  walletQrLead: ['Покажи касиру партнерського закладу — він спише бали за знижку', 'Ukaž pokladní v partnerském podniku — odečte body za slevu', 'Show it to the cashier at a partner place to redeem points'],
+  walletQrLead: ['Покажи касиру партнерського закладу під час покупки — він спише бали й дасть знижку', 'Ukaž pokladní v partnerském podniku při nákupu — odečte body a dá slevu', 'Show it to the cashier when you buy something at a partner place to redeem points'],
   history: ['Історія', 'Historie', 'History'],
   tx_meeting: ['Зустріч', 'Schůzka', 'Meeting'],
   tx_sos_help: ['Допомога з SOS', 'Pomoc se SOS', 'SOS help'],

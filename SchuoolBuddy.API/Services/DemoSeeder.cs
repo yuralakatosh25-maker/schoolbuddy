@@ -9,6 +9,30 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
 {
     // ---------- Довідкові дані (один раз) ----------
 
+    // Знижки діють лише разом із покупкою — партнер нічого не віддає безкоштовно, а отримує клієнтів
+    static PartnerReward[] RewardsFor(int klatovka, int arena, int bistro) =>
+    [
+        new() { PartnerId = klatovka, TitleUa = "−10 % на покупку від 100 Kč", TitleCs = "−10 % na nákup od 100 Kč", TitleEn = "10% off a purchase of 100 Kč+", Cost = 40, MinTier = 0 },
+        new() { PartnerId = klatovka, TitleUa = "−20 % на каву при купівлі десерту", TitleCs = "−20 % na kávu při koupi zákusku", TitleEn = "20% off coffee with a dessert", Cost = 100, MinTier = 1 },
+        new() { PartnerId = arena, TitleUa = "−15 % на годину гри при купівлі від 2 годин", TitleCs = "−15 % na hodinu hraní při koupi od 2 hodin", TitleEn = "15% off play time when buying 2+ hours", Cost = 80, MinTier = 0 },
+        new() { PartnerId = arena, TitleUa = "−50 % на напій при купівлі 3 годин", TitleCs = "−50 % na nápoj při koupi 3 hodin", TitleEn = "50% off a drink with 3 hours", Cost = 150, MinTier = 2 },
+        new() { PartnerId = bistro, TitleUa = "−10 % на обідне меню при замовленні", TitleCs = "−10 % na polední menu při objednávce", TitleEn = "10% off the lunch menu with an order", Cost = 60, MinTier = 1 },
+        new() { PartnerId = bistro, TitleUa = "−20 % на обідне меню + напій", TitleCs = "−20 % na polední menu + nápoj", TitleEn = "20% off the lunch menu + drink order", Cost = 140, MinTier = 3 },
+    ];
+
+    // Наявні бази (локальна, Neon) отримують нові умови знижок без перестворення даних
+    public async Task SyncRewardsAsync()
+    {
+        var partners = await db.Partners.ToDictionaryAsync(p => p.Name, p => p.Id);
+        if (!partners.TryGetValue("Kavárna Klatovka", out var k) || !partners.TryGetValue("CyberArena Plzeň", out var a) || !partners.TryGetValue("Bistro Na Rohu", out var b)) return;
+        var wanted = RewardsFor(k, a, b);
+        var have = await db.PartnerRewards.Where(r => r.PartnerId == k || r.PartnerId == a || r.PartnerId == b).ToListAsync();
+        if (have.Count == wanted.Length && have.All(h => wanted.Any(w => w.PartnerId == h.PartnerId && w.TitleEn == h.TitleEn))) return;
+        db.PartnerRewards.RemoveRange(have);
+        db.PartnerRewards.AddRange(wanted);
+        await db.SaveChangesAsync();
+    }
+
     public async Task SeedReferenceAsync()
     {
         if (await db.Subjects.AnyAsync()) return;
@@ -51,13 +75,7 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
         db.Partners.AddRange(klatovka, arena, bistro);
         await db.SaveChangesAsync();
 
-        db.PartnerRewards.AddRange(
-            new PartnerReward { PartnerId = klatovka.Id, TitleUa = "−20 % на будь-яку каву", TitleCs = "−20 % na jakoukoli kávu", TitleEn = "20% off any coffee", Cost = 40, MinTier = 0 },
-            new PartnerReward { PartnerId = klatovka.Id, TitleUa = "Кава та десерт безкоштовно", TitleCs = "Káva a zákusek zdarma", TitleEn = "Free coffee & dessert", Cost = 120, MinTier = 1 },
-            new PartnerReward { PartnerId = arena.Id, TitleUa = "1 година гри", TitleCs = "1 hodina hraní", TitleEn = "1 hour of play", Cost = 80, MinTier = 0 },
-            new PartnerReward { PartnerId = arena.Id, TitleUa = "3 години + напій", TitleCs = "3 hodiny + nápoj", TitleEn = "3 hours + drink", Cost = 200, MinTier = 2 },
-            new PartnerReward { PartnerId = bistro.Id, TitleUa = "Суп дня безкоштовно", TitleCs = "Polévka dne zdarma", TitleEn = "Free soup of the day", Cost = 60, MinTier = 1 },
-            new PartnerReward { PartnerId = bistro.Id, TitleUa = "−30 % на обіднє меню", TitleCs = "−30 % na polední menu", TitleEn = "30% off lunch menu", Cost = 150, MinTier = 3 });
+        db.PartnerRewards.AddRange(RewardsFor(klatovka.Id, arena.Id, bistro.Id));
 
         db.SafePlaces.AddRange(
             new SafePlace { Name = "Knihovna SŠINFIS", Kind = "school", Address = "Klatovská tř. 200G, Plzeň", Lat = 49.72625, Lng = 13.36680, Hours = "Po–Pá 7:30–16:00" },

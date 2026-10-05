@@ -5,9 +5,9 @@ import {
 import { useApp, useApi } from '../app/context'
 import { useNav } from '../app/nav'
 import { pick } from '../lib/i18n'
-import { fmtDay, fmtRelative, parseLocalDate } from '../lib/format'
+import { fmtRelative } from '../lib/format'
 import { Avatar, Badge, Card, Empty, List, Section, Skeleton, VerifiedMark, cx } from '../components/ui'
-import { ExamRow, HomeworkRow, LessonRow, MeetingRow, NotificationRow } from '../components/items'
+import { ExamRow, HomeworkRow, MeetingRow, NotificationRow } from '../components/items'
 import { WaveBand } from '../components/Waves'
 
 export default function Home() {
@@ -105,22 +105,6 @@ export default function Home() {
         <div className="mt-6 space-y-3"><Skeleton className="h-40" /><Skeleton className="h-28" /><Skeleton className="h-28" /></div>
       ) : data && (
         <>
-          {me.role !== 'admin' && <Section
-            title={data.lessonsIsToday ? t('todaySchedule') : t('scheduleFor', { day: fmtDay(parseLocalDate(data.lessonsDate), lang, t).toLowerCase() })}
-            action={t('seeAll')} onAction={() => nav.push('schedule')}>
-            {!me.class ? (
-              <Card><Empty icon={CalendarRange} text={t('noClass')} /></Card>
-            ) : data.lessons.length === 0 ? (
-              <Card><Empty icon={CalendarRange} text={t('noLessons')} /></Card>
-            ) : (
-              <List>
-                {data.lessons.map((l) => (
-                  <LessonRow key={l.id} lesson={l} isToday={data.lessonsIsToday} onClick={() => nav.push('schedule', { lessonId: l.id })} />
-                ))}
-              </List>
-            )}
-          </Section>}
-
           {data.exams.length > 0 && (
             <Section title={t('upcomingExams')} action={t('seeAll')} onAction={() => nav.push('schedule', { view: 'exams' })}>
               <List>{data.exams.map((e) => <ExamRow key={e.id} exam={e} onClick={() => nav.push('schedule', { view: 'exams' })} />)}</List>

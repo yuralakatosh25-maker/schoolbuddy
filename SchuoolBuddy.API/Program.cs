@@ -111,6 +111,7 @@ using (var scope = app.Services.CreateScope())
     else db.Database.Migrate();
     var seeder = scope.ServiceProvider.GetRequiredService<DemoSeeder>();
     await seeder.SeedReferenceAsync();
+    await seeder.SyncRewardsAsync();
     await seeder.EnsureTimelineAsync();
     if (config.GetValue("Demo:Enabled", true)) await seeder.SeedDemoAsync();
 }
