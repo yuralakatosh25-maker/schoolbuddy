@@ -61,7 +61,7 @@ public class PlacesController(AppDbContext db) : ApiBase
     [HttpGet]
     public async Task<IActionResult> All()
     {
-        var partners = await db.Partners.ToDictionaryAsync(p => p.Id);
+        var partners = await db.Partners.Where(p => p.Status != "pending").ToDictionaryAsync(p => p.Id);
         var rewards = await db.PartnerRewards.ToListAsync();
         var places = await db.SafePlaces.OrderBy(p => p.Id).ToListAsync();
         return Ok(places.Select(p => new

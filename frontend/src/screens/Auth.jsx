@@ -122,6 +122,7 @@ export default function Auth() {
             </form>
 
             <DemoBlock t={t} onDemo={demo} busy={busy} />
+            <a href="/partner" className="mt-4 block text-center text-[13.5px] text-muted underline-offset-4 hover:text-ink hover:underline">{t('bizForBusiness')}</a>
           </div>
         )}
 

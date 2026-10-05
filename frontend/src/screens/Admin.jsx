@@ -21,11 +21,40 @@ export default function Admin() {
         { value: 'users', label: t('users') },
         { value: 'moderation', label: t('moderation') },
         { value: 'school', label: t('schedule') },
+        { value: 'partners', label: t('partnersTab') },
       ]} />
       {tab === 'overview' && <Overview />}
       {tab === 'users' && <UsersTab />}
       {tab === 'moderation' && <Moderation />}
       {tab === 'school' && <SchoolTab />}
+      {tab === 'partners' && <PartnersTab />}
+    </div>
+  )
+}
+
+function PartnersTab() {
+  const { t, lang, fail, toast } = useApp()
+  const { data, loading, reload } = useApi('/api/admin/partners')
+  const act = async (id, action) => {
+    try { await api.post(`/api/admin/partners/${id}/${action}`); toast(t('saved')); reload() } catch (e) { fail(e) }
+  }
+  return (
+    <div className="mt-4">
+      {loading && !data ? <Loading /> : !data?.length ? <Empty text={t('noData')} /> : (
+        <List>
+          {data.map((p) => (
+            <Row key={p.id} chevron={false} left={<Store className="size-4 text-muted" />}
+              title={<span className="flex items-center gap-2">{p.name}{p.status === 'pending' && <Badge tone="warn">{t('pending')}</Badge>}</span>}
+              subtitle={`${t('kind_' + p.kind)} · ${p.address}${p.contactEmail ? ` · ${p.contactEmail}` : ''} · ${p.visits} ${t('bizVisits').toLowerCase()}`}
+              right={p.status === 'pending' ? (
+                <div className="flex gap-1">
+                  <Button size="sm" variant="primary" icon={Check} onClick={() => act(p.id, 'approve')}>{t('approve')}</Button>
+                  <Button size="sm" variant="ghost" icon={Ban} onClick={() => act(p.id, 'reject')} aria-label={t('reject')} />
+                </div>
+              ) : <span className="text-[11.5px] text-faint">{fmtRelative(p.createdAt, lang, t)}</span>} />
+          ))}
+        </List>
+      )}
     </div>
   )
 }

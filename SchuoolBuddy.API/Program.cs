@@ -106,6 +106,10 @@ using (var scope = app.Services.CreateScope())
                 "CreatedAt" timestamptz NOT NULL);
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_Swipes_SwiperId_TargetId" ON "Swipes" ("SwiperId", "TargetId");
             CREATE INDEX IF NOT EXISTS "IX_Swipes_TargetId" ON "Swipes" ("TargetId");
+            ALTER TABLE "Partners" ADD COLUMN IF NOT EXISTS "ContactEmail" varchar(200);
+            ALTER TABLE "Partners" ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'approved';
+            ALTER TABLE "Partners" ADD COLUMN IF NOT EXISTS "CreatedAt" timestamptz NOT NULL DEFAULT now();
+            ALTER TABLE "CoinTransactions" ADD COLUMN IF NOT EXISTS "PurchaseAmount" integer;
             """);
     }
     else db.Database.Migrate();

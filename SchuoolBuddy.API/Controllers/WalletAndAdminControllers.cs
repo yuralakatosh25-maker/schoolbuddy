@@ -16,8 +16,8 @@ public class WalletController(AppDbContext db, Gamification game) : ApiBase
         var me = await db.Users.FindAsync(Me);
         var stats = await game.StatsAsync(Me);
         var tx = await db.CoinTransactions.Where(t => t.UserId == Me).OrderByDescending(t => t.Id).Take(40).ToListAsync();
-        var partners = await db.Partners.ToDictionaryAsync(p => p.Id, p => p.Name);
-        var rewards = await db.PartnerRewards.OrderBy(r => r.MinTier).ThenBy(r => r.Cost).ToListAsync();
+        var partners = await db.Partners.Where(p => p.Status != "pending").ToDictionaryAsync(p => p.Id, p => p.Name);
+        var rewards = (await db.PartnerRewards.OrderBy(r => r.MinTier).ThenBy(r => r.Cost).ToListAsync()).Where(r => partners.ContainsKey(r.PartnerId)).ToList();
         return Ok(new
         {
             balance = me!.Coins,
@@ -38,15 +38,39 @@ public class WalletController(AppDbContext db, Gamification game) : ApiBase
     }
 }
 
-// API для касирів партнерських закладів: автентифікація заголовком X-Partner-Key
+// API для партнерських закладів: автентифікація заголовком X-Partner-Key.
+// Заклад реєструється сам (статус "pending"), адмін школи схвалює його — лише після цього він бачить касу й додає пропозиції.
 [Route("api/partner")]
 [AllowAnonymous]
 public class PartnerController(AppDbContext db, Gamification game, NotificationService notify) : ApiBase
 {
+    static readonly string[] Kinds = ["cafe", "cyberclub", "shop", "sport", "other"];
+    static readonly System.Text.RegularExpressions.Regex EmailRe = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$");
+
     async Task<Partner?> Auth()
     {
         var key = Request.Headers["X-Partner-Key"].ToString();
         return string.IsNullOrEmpty(key) ? null : await db.Partners.FirstOrDefaultAsync(p => p.ApiKey == key);
+    }
+
+    public record RegisterDto(string Name, string Kind, string Address, string ContactEmail);
+
+    // Самореєстрація підприємця: ключ показується один раз у відповіді
+    [HttpPost("register")]
+    public async Task<IActionResult> Register(RegisterDto req)
+    {
+        var name = (req.Name ?? "").Trim();
+        var address = (req.Address ?? "").Trim();
+        var email = (req.ContactEmail ?? "").Trim();
+        if (name.Length is < 2 or > 60 || address.Length is < 3 or > 120 || !EmailRe.IsMatch(email) || email.Length > 200 || !Kinds.Contains(req.Kind))
+            return Fail("invalid");
+        if (await db.Partners.AnyAsync(p => p.Name.ToLower() == name.ToLower())) return Fail("partner_exists");
+        if (await db.Partners.CountAsync(p => p.Status == "pending") >= 50) return Fail("partner_limit", 429);
+
+        var key = "sbp_" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        db.Partners.Add(new Partner { Name = name, Kind = req.Kind, Address = address, ContactEmail = email, ApiKey = key, Status = "pending" });
+        await db.SaveChangesAsync();
+        return Ok(new { apiKey = key, status = "pending" });
     }
 
     [HttpGet("me")]
@@ -55,21 +79,51 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         var p = await Auth();
         if (p == null) return Fail("partner_key", 401);
         var rewards = await db.PartnerRewards.Where(r => r.PartnerId == p.Id).OrderBy(r => r.Cost).ToListAsync();
-        return Ok(new { p.Id, p.Name, p.Kind, p.Address, rewards });
+        return Ok(new { p.Id, p.Name, p.Kind, p.Address, p.ContactEmail, p.Status, rewards });
     }
 
     // Сканування QR-коду ментора: показуємо нікнейм, баланс і рівень
     [HttpGet("customer/{qr}")]
     public async Task<IActionResult> Customer(string qr)
     {
-        if (await Auth() == null) return Fail("partner_key", 401);
+        var p = await Auth();
+        if (p == null) return Fail("partner_key", 401);
+        if (p.Status == "pending") return Fail("partner_pending", 403);
         var u = await db.Users.FirstOrDefaultAsync(x => x.QrToken == qr.Trim());
         if (u == null || u.IsBlocked) return Fail("not_found", 404);
         var stats = await game.StatsAsync(u.Id);
         return Ok(new { u.Nickname, u.Avatar, u.Role, coins = u.Coins, tier = stats.Tier, verified = u.IsSchoolApproved });
     }
 
-    public record RedeemDto(string QrToken, int RewardId);
+    public record RewardDto(string Title, int Cost, int MinTier);
+
+    // Пропозиція партнера: знижка за бали, що діє лише разом із покупкою
+    [HttpPost("rewards")]
+    public async Task<IActionResult> AddReward(RewardDto req)
+    {
+        var p = await Auth();
+        if (p == null) return Fail("partner_key", 401);
+        if (p.Status == "pending") return Fail("partner_pending", 403);
+        var title = (req.Title ?? "").Trim();
+        if (title.Length is < 5 or > 100 || req.Cost is < 10 or > 1000 || req.MinTier is < 0 or > 3) return Fail("invalid");
+        if (await db.PartnerRewards.CountAsync(r => r.PartnerId == p.Id) >= 8) return Fail("too_many_rewards");
+        var r = new PartnerReward { PartnerId = p.Id, TitleUa = title, TitleCs = title, TitleEn = title, Cost = req.Cost, MinTier = req.MinTier };
+        db.PartnerRewards.Add(r);
+        await db.SaveChangesAsync();
+        return Ok(r);
+    }
+
+    [HttpDelete("rewards/{id:int}")]
+    public async Task<IActionResult> DeleteReward(int id)
+    {
+        var p = await Auth();
+        if (p == null) return Fail("partner_key", 401);
+        await db.PartnerRewards.Where(r => r.Id == id && r.PartnerId == p.Id).ExecuteDeleteAsync();
+        return Ok(new { ok = true });
+    }
+
+    // PurchaseAmount — сума чека в Kč: знижка діє лише при покупці, а партнер бачить, скільки клієнти витратили
+    public record RedeemDto(string QrToken, int RewardId, int PurchaseAmount);
 
     // Списання балів за знижку + фіксація транзакції
     [HttpPost("redeem")]
@@ -77,6 +131,8 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
     {
         var p = await Auth();
         if (p == null) return Fail("partner_key", 401);
+        if (p.Status == "pending") return Fail("partner_pending", 403);
+        if (req.PurchaseAmount is < 1 or > 100000) return Fail("purchase_required");
         var reward = await db.PartnerRewards.FirstOrDefaultAsync(r => r.Id == req.RewardId && r.PartnerId == p.Id);
         if (reward == null) return Fail("not_found", 404);
         var u = await db.Users.FirstOrDefaultAsync(x => x.QrToken == req.QrToken.Trim());
@@ -85,7 +141,7 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         if (stats.Tier < reward.MinTier) return Fail("tier_locked");
         if (u.Coins < reward.Cost) return Fail("not_enough_coins");
 
-        await game.AddCoinsAsync(u.Id, -reward.Cost, "redeem", p.Id, reward.Id);
+        await game.AddCoinsAsync(u.Id, -reward.Cost, "redeem", p.Id, reward.Id, req.PurchaseAmount);
         await notify.NotifyAsync(u.Id, "coins_spent", new { amount = reward.Cost, partner = p.Name, rewardUa = reward.TitleUa, rewardCs = reward.TitleCs, rewardEn = reward.TitleEn }, "/wallet");
         return Ok(new { ok = true, balance = u.Coins });
     }
@@ -98,7 +154,32 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         var tx = await db.CoinTransactions.Where(t => t.PartnerId == p.Id).OrderByDescending(t => t.Id).Take(50).ToListAsync();
         var ids = tx.Select(t => t.UserId).ToList();
         var users = await db.Users.Where(u => ids.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.Nickname);
-        return Ok(tx.Select(t => new { t.Id, t.Amount, t.RewardId, t.CreatedAt, nickname = users.GetValueOrDefault(t.UserId) }));
+        return Ok(tx.Select(t => new { t.Id, t.Amount, t.RewardId, t.PurchaseAmount, t.CreatedAt, nickname = users.GetValueOrDefault(t.UserId) }));
+    }
+
+    // Звіт для підприємця: скільки клієнтів привів застосунок і на яку суму вони купили
+    [HttpGet("stats")]
+    public async Task<IActionResult> Stats()
+    {
+        var p = await Auth();
+        if (p == null) return Fail("partner_key", 401);
+        var since = DateTime.UtcNow.AddDays(-30);
+        var all = await db.CoinTransactions.Where(t => t.PartnerId == p.Id && t.Reason == "redeem").ToListAsync();
+        object Summary(List<CoinTransaction> l) => new
+        {
+            visits = l.Count,
+            customers = l.Select(t => t.UserId).Distinct().Count(),
+            purchaseTotal = l.Sum(t => t.PurchaseAmount ?? 0),
+            avgCheck = l.Count(t => t.PurchaseAmount > 0) == 0 ? 0 : (int)l.Where(t => t.PurchaseAmount > 0).Average(t => t.PurchaseAmount!.Value),
+        };
+        var rewards = await db.PartnerRewards.Where(r => r.PartnerId == p.Id).ToDictionaryAsync(r => r.Id, r => r.TitleUa);
+        return Ok(new
+        {
+            last30 = Summary(all.Where(t => t.CreatedAt >= since).ToList()),
+            total = Summary(all),
+            top = all.Where(t => t.RewardId != null).GroupBy(t => t.RewardId!.Value)
+                .Select(g => new { title = rewards.GetValueOrDefault(g.Key, "—"), count = g.Count() }).OrderByDescending(x => x.count).Take(3),
+        });
     }
 }
 
@@ -152,6 +233,31 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
             coinsIssued = await db.CoinTransactions.Where(t => t.Amount > 0).SumAsync(t => (int?)t.Amount) ?? 0,
             daily,
         });
+    }
+
+    // Підприємці: заявки на партнерство
+    [HttpGet("partners")]
+    public async Task<IActionResult> Partners()
+    {
+        var list = await db.Partners.OrderByDescending(p => p.Status == "pending").ThenByDescending(p => p.Id).ToListAsync();
+        var visits = await db.CoinTransactions.Where(t => t.PartnerId != null && t.Reason == "redeem")
+            .GroupBy(t => t.PartnerId).Select(g => new { id = g.Key, n = g.Count() }).ToDictionaryAsync(x => x.id!.Value, x => x.n);
+        return Ok(list.Select(p => new { p.Id, p.Name, p.Kind, p.Address, p.ContactEmail, p.Status, p.CreatedAt, visits = visits.GetValueOrDefault(p.Id) }));
+    }
+
+    [HttpPost("partners/{id:int}/approve")]
+    public async Task<IActionResult> ApprovePartner(int id)
+    {
+        await db.Partners.Where(p => p.Id == id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "approved"));
+        return Ok(new { ok = true });
+    }
+
+    // Відхилення видаляє лише заявки, що чекають; активного партнера не чіпаємо
+    [HttpPost("partners/{id:int}/reject")]
+    public async Task<IActionResult> RejectPartner(int id)
+    {
+        await db.Partners.Where(p => p.Id == id && p.Status == "pending").ExecuteDeleteAsync();
+        return Ok(new { ok = true });
     }
 
     [HttpGet("users")]

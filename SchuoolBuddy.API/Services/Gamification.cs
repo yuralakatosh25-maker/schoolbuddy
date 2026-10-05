@@ -25,12 +25,12 @@ public class Gamification(AppDbContext db, NotificationService notify)
     // Звання за спільні активності (події + підтверджені зустрічі)
     static readonly (int min, string code)[] Titles = [(20, "legend"), (10, "captain"), (5, "squad"), (2, "teammate"), (0, "rookie")];
 
-    public async Task AddCoinsAsync(int userId, int amount, string reason, int? partnerId = null, int? rewardId = null)
+    public async Task AddCoinsAsync(int userId, int amount, string reason, int? partnerId = null, int? rewardId = null, int? purchaseAmount = null)
     {
         var user = await db.Users.FindAsync(userId);
         if (user == null) return;
         user.Coins += amount;
-        db.CoinTransactions.Add(new CoinTransaction { UserId = userId, Amount = amount, Reason = reason, PartnerId = partnerId, RewardId = rewardId });
+        db.CoinTransactions.Add(new CoinTransaction { UserId = userId, Amount = amount, Reason = reason, PartnerId = partnerId, RewardId = rewardId, PurchaseAmount = purchaseAmount });
         await db.SaveChangesAsync();
     }
 

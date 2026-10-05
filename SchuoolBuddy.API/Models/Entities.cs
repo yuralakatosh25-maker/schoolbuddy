@@ -394,6 +394,7 @@ public class CoinTransaction
     public string Reason { get; set; } = ""; // ключ: "meeting", "achievement:FIRST_HELP", "invite", "redeem" …
     public int? PartnerId { get; set; }
     public int? RewardId { get; set; }
+    public int? PurchaseAmount { get; set; } // сума чека в Kč при списанні за знижку
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
@@ -404,6 +405,10 @@ public class Partner
     public string Kind { get; set; } = "cafe";
     public string Address { get; set; } = "";
     public string ApiKey { get; set; } = "";
+    [MaxLength(200)] public string? ContactEmail { get; set; }
+    // "pending" — заявка підприємця чекає схвалення адміна; усе інше — активний партнер
+    public string Status { get; set; } = "approved";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 public class PartnerReward
