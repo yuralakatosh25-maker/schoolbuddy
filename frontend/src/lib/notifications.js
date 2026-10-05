@@ -1,6 +1,6 @@
 import {
   LifeBuoy, MessageCircle, UserPlus, Link2, Archive, CalendarClock, CalendarCheck, CalendarX, BookOpen,
-  ClipboardList, PartyPopper, Megaphone, Award, Gift, Coins, ShieldCheck, Bell, Repeat,
+  ClipboardList, PartyPopper, Megaphone, Award, Gift, Coins, ShieldCheck, Bell, Repeat, Heart,
 } from 'lucide-react'
 import { pick } from './i18n'
 import { fmtDayTime, fmtTime, fmtDay, parseLocalDate, parseJson } from './format'
@@ -11,7 +11,7 @@ const icons = {
   meeting_confirm_needed: CalendarCheck, meeting_completed: CalendarCheck, meeting_cancelled: CalendarX,
   lesson_reminder: BookOpen, exam_reminder: ClipboardList, exam_added: ClipboardList, schedule_change: Repeat,
   homework_deadline: ClipboardList, event_reminder: PartyPopper, event_new: PartyPopper, announcement: Megaphone,
-  achievement: Award, invite_joined: Gift, coins_spent: Coins, school_approved: ShieldCheck,
+  match_new: Heart, achievement: Award, invite_joined: Gift, coins_spent: Coins, school_approved: ShieldCheck,
 }
 
 // Локалізований заголовок і текст сповіщення за його типом і параметрами
@@ -25,6 +25,7 @@ export function describeNotification(n, { t, lang, subjectName }) {
     connection_request: [t('n_connection_request'), t('n_connection_request_body', { name: d.name })],
     connection_accepted: [t('n_connection_accepted'), t('n_connection_accepted_body', { name: d.name })],
     connection_archived: [t('n_connection_archived'), d.name],
+    match_new: [t('n_match_new'), t('n_match_new_body', { name: d.name })],
     message_new: [d.mentor ? t('n_message_mentor') : t('n_message_new'), d.name],
     meeting_scheduled: [t('n_meeting_scheduled'), [d.name, at].filter(Boolean).join(' · ')],
     meeting_reminder: [t('n_meeting_reminder'), [d.name, d.at ? fmtTime(d.at, lang) : ''].filter(Boolean).join(' · ')],

@@ -160,7 +160,7 @@ public class SosRequest
     public DateTime? AcceptedAt { get; set; }
 }
 
-// Status: "pending" | "active" | "archived" | "declined"; Origin: "request" | "sos" | "qr"
+// Status: "pending" | "active" | "archived" | "declined"; Origin: "request" | "sos" | "qr" | "match" (рівноправний чат двох учнів після взаємного свайпу; StudentId/MentorId там лише впорядковані за Id)
 public class Connection
 {
     public int Id { get; set; }
@@ -366,6 +366,16 @@ public class Report
     public string Status { get; set; } = "open";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ResolvedAt { get; set; }
+}
+
+// «Seznamka»: свайп користувача вправо (Liked) або вліво. Взаємні вподобання дають чат-метч.
+public class Swipe
+{
+    public int Id { get; set; }
+    public int SwiperId { get; set; }
+    public int TargetId { get; set; }
+    public bool Liked { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 public class Block

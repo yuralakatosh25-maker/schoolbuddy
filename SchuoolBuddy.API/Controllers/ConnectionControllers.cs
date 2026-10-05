@@ -55,7 +55,7 @@ public class ConnectionsController(AppDbContext db, NotificationService notify, 
             return new
             {
                 c.Id, c.Status, c.Origin, c.CreatedAt, c.AcceptedAt, c.ArchivedAt,
-                myRole = c.MentorId == Me ? "mentor" : "student",
+                myRole = c.Origin == "match" ? "peer" : c.MentorId == Me ? "mentor" : "student",
                 with = Views.Card(users[c.StudentId == Me ? c.MentorId : c.StudentId]),
                 lastMessage = lastMsg == null ? null : new { lastMsg.Text, lastMsg.SystemType, lastMsg.CreatedAt, mine = lastMsg.SenderId == Me },
                 meetings = meetings.GetValueOrDefault(c.Id),
@@ -109,7 +109,7 @@ public class ConnectionsController(AppDbContext db, NotificationService notify, 
         if (conn == null) return Fail("not_found", 404);
         var me = await db.Users.FindAsync(Me);
         if (!me!.IsSchoolApproved) return Fail("not_approved", 403);
-        var active = await db.Connections.CountAsync(c => c.MentorId == Me && c.Status == "active");
+        var active = await db.Connections.CountAsync(c => c.MentorId == Me && c.Status == "active" && c.Origin != "match");
         if (active >= me.MaxStudents) return Fail("mentor_full");
 
         conn.Status = "active";
@@ -164,7 +164,7 @@ public class ConnectionsController(AppDbContext db, NotificationService notify, 
         return Ok(new
         {
             conn.Id, conn.Status, conn.Origin, conn.CreatedAt, conn.AcceptedAt, conn.ArchivedAt,
-            myRole = conn.MentorId == Me ? "mentor" : "student",
+            myRole = conn.Origin == "match" ? "peer" : conn.MentorId == Me ? "mentor" : "student",
             with = other == null ? null : Views.Card(other),
             stats = new { messages = messageCount, sos = sosCount, meetings = meetings.Count(m => m.Status == "completed") },
             meetings = meetings.Select(m => new { m.Id, m.ScheduledAt, m.Status, m.Topic, place = m.PlaceId != null ? places.GetValueOrDefault(m.PlaceId.Value) : null }),

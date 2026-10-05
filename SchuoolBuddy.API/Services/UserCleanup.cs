@@ -27,6 +27,7 @@ public class UserCleanup(AppDbContext db, AnonHasher hasher)
         await db.TrustedContacts.Where(t => t.UserId == userId).ExecuteDeleteAsync();
         await db.CoinTransactions.Where(t => t.UserId == userId).ExecuteDeleteAsync();
         await db.Reports.Where(r => r.ReporterId == userId || (r.TargetType == "user" && r.TargetId == userId)).ExecuteDeleteAsync();
+        await db.Swipes.Where(s => s.SwiperId == userId || s.TargetId == userId).ExecuteDeleteAsync();
         await db.Blocks.Where(b => b.BlockerId == userId || b.BlockedId == userId).ExecuteDeleteAsync();
         await db.EventParticipants.Where(p => p.UserId == userId).ExecuteDeleteAsync();
         await db.GroupMembers.Where(m => m.UserId == userId).ExecuteDeleteAsync();

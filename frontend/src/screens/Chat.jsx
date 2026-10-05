@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import {
   SendHorizontal, CalendarPlus, MoreHorizontal, LifeBuoy, CalendarClock, CalendarCheck, Link2, Archive, UserRound, Flag, Ban,
-  MessagesSquare, Users,
+  MessagesSquare, Users, Heart,
 } from 'lucide-react'
 import { useApp, useApi, usePolling } from '../app/context'
 import { useNav } from '../app/nav'
@@ -43,7 +43,7 @@ export function Chats() {
               <Section key={key} title={t(key)}>
                 <List>
                   {items.map((c) => (
-                    <PersonRow key={c.id} person={c.with} subtitle={preview(c) || t(c.myRole === 'mentor' ? 'student' : 'mentor')}
+                    <PersonRow key={c.id} person={c.with} subtitle={preview(c) || t(c.myRole === 'peer' ? 'peerLabel' : c.myRole === 'mentor' ? 'student' : 'mentor')}
                       right={c.lastMessage ? <span className="shrink-0 text-[11.5px] text-faint">{fmtRelative(c.lastMessage.createdAt, lang, t)}</span> : null}
                       onClick={() => (c.status === 'pending' ? nav.push('user', { id: c.with.id }) : nav.push('chat', { id: c.id }))} />
                   ))}
@@ -89,7 +89,7 @@ function SystemMessage({ m, onMeeting }) {
       </button>
     )
   }
-  const icons = { meeting_done: CalendarCheck, connected: Link2, archived: Archive }
+  const icons = { meeting_done: CalendarCheck, connected: Link2, archived: Archive, matched: Heart }
   const Icon = icons[m.systemType] ?? Link2
   return (
     <div className="mx-auto flex items-center gap-1.5 rounded-full bg-raised px-3 py-1 text-[12px] text-muted">
@@ -185,7 +185,7 @@ export function Chat({ id }) {
         ) : ''}
         right={c && (
           <>
-            {!archived && <IconButton icon={CalendarPlus} label={t('scheduleMeeting')} onClick={() => setPlanner(true)} />}
+            {!archived && c.myRole !== 'peer' && <IconButton icon={CalendarPlus} label={t('scheduleMeeting')} onClick={() => setPlanner(true)} />}
             <IconButton icon={MoreHorizontal} label={t('more')} onClick={() => setMenu(true)} />
           </>
         )} />
@@ -251,7 +251,7 @@ export function Chat({ id }) {
         )}
       </Sheet>
 
-      {c && other && (
+      {c && other && c.myRole !== 'peer' && (
         <MeetingPlanner open={planner} onClose={() => setPlanner(false)} connectionId={c.id}
           mentorId={c.myRole === 'mentor' ? me.id : other.id}
           onCreated={() => { setPlanner(false); fetchNew() }} />

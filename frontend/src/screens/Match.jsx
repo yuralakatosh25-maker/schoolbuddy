@@ -6,10 +6,28 @@ import { api } from '../lib/api'
 import { pick } from '../lib/i18n'
 import { Badge, Button, Chip, Empty, List, PageTitle, ScreenHeader, Section, Segmented, Skeleton, cx } from '../components/ui'
 import { PersonRow } from '../components/items'
+import Swipe from './Swipe'
 
 const CATEGORIES = ['it', 'games', 'sport', 'hobby', 'study']
 
-export default function Match({ pushed, subjectId: initialSubject }) {
+// Вкладка «Пошук»: перемикач між каталогом людей і свайпами (seznamka)
+export default function Match(props) {
+  const { t } = useApp()
+  const [mode, setMode] = useState('people')
+  if (props.pushed) return <People {...props} />
+  return (
+    <div className="px-4 pb-8">
+      <PageTitle sub={mode === 'people' ? t('interestsLead') : undefined}>{mode === 'people' ? t('interests') : t('tabSwipe')}</PageTitle>
+      <Segmented className="mt-4" value={mode} onChange={setMode} options={[
+        { value: 'people', label: t('tabPeople') },
+        { value: 'swipe', label: t('tabSwipe') },
+      ]} />
+      {mode === 'swipe' ? <Swipe /> : <People embedded />}
+    </div>
+  )
+}
+
+function People({ pushed, embedded, subjectId: initialSubject }) {
   const { t, me, setMe, lang, subjects, fail, errText, toast } = useApp()
   const nav = useNav()
   const { data: allTags, setData: setAllTags } = useApi('/api/tags')
@@ -71,9 +89,7 @@ export default function Match({ pushed, subjectId: initialSubject }) {
   }, [allTags])
 
   const content = (
-    <div className="px-4 pb-8">
-      {!pushed && <PageTitle sub={t('interestsLead')}>{t('interests')}</PageTitle>}
-
+    <div className={embedded ? '' : 'px-4 pb-8'}>
       <div className={cx('relative', pushed ? 'mt-3' : 'mt-4')}>
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint" />
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('searchPeople')} className="field pl-9" />
@@ -146,7 +162,7 @@ export default function Match({ pushed, subjectId: initialSubject }) {
     </div>
   )
 
-  if (!pushed) return content
+  if (embedded) return content
   return (
     <>
       <ScreenHeader title={t('qaFindMentor')} onBack={nav.pop} backLabel={t('back')} />

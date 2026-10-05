@@ -117,6 +117,7 @@ public static class NotificationTexts
         ["connection_request"] = ("{name} хоче, щоб ти став(ла) його ментором", "{name} tě žádá o mentoring", "{name} asked you to be their mentor"),
         ["connection_accepted"] = ("{name} тепер твій ментор", "{name} je teď tvůj mentor", "{name} is now your mentor"),
         ["connection_archived"] = ("Звʼязок із {name} заархівовано", "Spojení s {name} bylo archivováno", "Your connection with {name} was archived"),
+        ["match_new"] = ("У вас метч з {name}!", "Máte shodu s {name}!", "You matched with {name}!"),
         ["message_new"] = ("Нове повідомлення від {name}", "Nová zpráva od {name}", "New message from {name}"),
         ["meeting_scheduled"] = ("Нова зустріч з {name}", "Nová schůzka s {name}", "New meeting with {name}"),
         ["meeting_reminder"] = ("Скоро зустріч з {name}", "Brzy máš schůzku s {name}", "Upcoming meeting with {name}"),

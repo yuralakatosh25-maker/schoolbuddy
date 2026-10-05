@@ -37,7 +37,7 @@ public class Gamification(AppDbContext db, NotificationService notify)
     public async Task<UserStats> StatsAsync(int userId)
     {
         var helped = await db.Connections
-            .Where(c => c.MentorId == userId && (c.Status == "active" || c.Status == "archived"))
+            .Where(c => c.MentorId == userId && c.Origin != "match" && (c.Status == "active" || c.Status == "archived"))
             .Select(c => c.StudentId).Distinct().CountAsync();
         var meetings = await db.Meetings.CountAsync(m => (m.MentorId == userId || m.StudentId == userId) && m.Status == "completed");
         var events = await db.EventParticipants.CountAsync(p => p.UserId == userId);
@@ -61,7 +61,7 @@ public class Gamification(AppDbContext db, NotificationService notify)
 
         var have = await db.UserAchievements.Where(a => a.UserId == userId).Select(a => a.Code).ToListAsync();
         var s = await StatsAsync(userId);
-        var hasConnection = await db.Connections.AnyAsync(c => (c.MentorId == userId || c.StudentId == userId) && (c.Status == "active" || c.Status == "archived"));
+        var hasConnection = await db.Connections.AnyAsync(c => (c.MentorId == userId || c.StudentId == userId) && c.Origin != "match" && (c.Status == "active" || c.Status == "archived"));
         var helpedSos = await db.SosRequests.AnyAsync(r => r.MentorId == userId && (r.Status == "accepted" || r.Status == "resolved"));
 
         var earned = new Dictionary<string, bool>

@@ -34,6 +34,7 @@ public class AppDbContext : DbContext
     public DbSet<ForumPost> ForumPosts => Set<ForumPost>();
     public DbSet<ForumReply> ForumReplies => Set<ForumReply>();
     public DbSet<Report> Reports => Set<Report>();
+    public DbSet<Swipe> Swipes => Set<Swipe>();
     public DbSet<Block> Blocks => Set<Block>();
     public DbSet<CoinTransaction> CoinTransactions => Set<CoinTransaction>();
     public DbSet<Partner> Partners => Set<Partner>();
@@ -52,6 +53,8 @@ public class AppDbContext : DbContext
         b.Entity<GroupMember>().HasKey(m => new { m.GroupId, m.UserId });
         b.Entity<EventParticipant>().HasKey(p => new { p.EventId, p.UserId });
 
+        b.Entity<Swipe>().HasIndex(s => new { s.SwiperId, s.TargetId }).IsUnique();
+        b.Entity<Swipe>().HasIndex(s => s.TargetId);
         b.Entity<Message>().HasIndex(m => m.ConnectionId);
         b.Entity<Message>().HasIndex(m => m.GroupId);
         b.Entity<Notification>().HasIndex(n => new { n.UserId, n.IsRead });
