@@ -33,12 +33,12 @@ public class UserCleanup(AppDbContext db, AnonHasher hasher)
         await db.GroupMembers.Where(m => m.UserId == userId).ExecuteDeleteAsync();
         await db.EmailCodes.Where(c => c.Email == user.Email).ExecuteDeleteAsync();
 
-        // Події, створені користувачем, видаляємо разом з учасниками
+        // події юзера видаляємо разом з учасниками
         var eventIds = await db.Events.Where(e => e.CreatedById == userId).Select(e => e.Id).ToListAsync();
         await db.EventParticipants.Where(p => eventIds.Contains(p.EventId)).ExecuteDeleteAsync();
         await db.Events.Where(e => eventIds.Contains(e.Id)).ExecuteDeleteAsync();
 
-        // Групи: передаємо іншому учаснику або видаляємо порожні
+        // групи: віддаємо іншому або видаляємо
         foreach (var group in await db.StudyGroups.Where(g => g.CreatedById == userId).ToListAsync())
         {
             var heir = await db.GroupMembers.Where(m => m.GroupId == group.Id).OrderBy(m => m.JoinedAt).FirstOrDefaultAsync();
@@ -54,7 +54,7 @@ public class UserCleanup(AppDbContext db, AnonHasher hasher)
             }
         }
 
-        // Анонімні пости на форумі ідентифікуються лише хешем — знаходимо їх тим самим хешем
+        // анонімні пости шукаємо по хешу
         var hash = hasher.For(userId);
         var postIds = await db.ForumPosts.Where(p => p.AuthorHash == hash).Select(p => p.Id).ToListAsync();
         await db.ForumReplies.Where(r => r.AuthorHash == hash || postIds.Contains(r.PostId)).ExecuteDeleteAsync();

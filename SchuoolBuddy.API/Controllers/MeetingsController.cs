@@ -24,7 +24,7 @@ public class MeetingsController(AppDbContext db, NotificationService notify, Gam
             myRole = isStudent ? "student" : "mentor",
             with = other == null ? null : Views.Card(other),
             place = place == null ? null : Views.Place(place),
-            // PIN і QR бачить лише студент — він показує їх ментору при зустрічі
+            // PIN бачить тільки студент
             pin = isStudent && pinValid ? m.Pin : null,
             qrToken = isStudent && pinValid ? m.QrToken : null,
             pinExpiresAt = isStudent && pinValid ? m.PinExpiresAt : null,
@@ -77,7 +77,7 @@ public class MeetingsController(AppDbContext db, NotificationService notify, Gam
         return Ok(await Shape(m));
     }
 
-    // Студент генерує одноразовий PIN + QR (дійсні 10 хвилин)
+    // студент генерує PIN і QR на 10 хвилин
     [HttpPost("{id:int}/pin")]
     public async Task<IActionResult> Pin(int id)
     {
@@ -92,8 +92,8 @@ public class MeetingsController(AppDbContext db, NotificationService notify, Gam
 
     public record ConfirmDto(int? MeetingId, string? Pin, string? QrToken);
 
-    // Ментор підтверджує зустріч PIN-кодом або скануванням QR → нараховуються Buddy Coins
-    [HttpPost("confirm")]
+    // ментор підтверджує зустріч, і йому йдуть монети
+    [HttpPost("confirm"), Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("pin")]
     public async Task<IActionResult> Confirm(ConfirmDto req)
     {
         Meeting? m = null;
@@ -105,22 +105,35 @@ public class MeetingsController(AppDbContext db, NotificationService notify, Gam
         if (m.Status != "scheduled") return Fail("meeting_done");
         if (m.PinExpiresAt == null || m.PinExpiresAt < DateTime.UtcNow) return Fail("pin_expired");
         if (string.IsNullOrWhiteSpace(req.QrToken) && m.Pin != req.Pin?.Trim()) return Fail("pin_invalid");
+        // підтвердити можна не раніше ніж за годину до призначеного часу (демо-пари — будь-коли, для показу)
+        var demoPair = await db.Users.CountAsync(u => (u.Id == m.MentorId || u.Id == m.StudentId) && u.IsDemo) == 2;
+        if (!demoPair && DateTime.UtcNow < m.ScheduledAt.AddHours(-1)) return Fail("meeting_too_early");
 
-        m.Status = "completed";
-        m.CompletedAt = DateTime.UtcNow;
-        m.Pin = null;
-        m.QrToken = null;
-        m.PinExpiresAt = null;
-        await db.SaveChangesAsync();
+        // атомарно: повторний скан QR чи подвійний клік не завершать зустріч (і не дадуть монет) двічі
+        var now = DateTime.UtcNow;
+        var done = await db.Meetings.Where(x => x.Id == m.Id && x.Status == "scheduled").ExecuteUpdateAsync(s => s
+            .SetProperty(x => x.Status, "completed")
+            .SetProperty(x => x.CompletedAt, now)
+            .SetProperty(x => x.Pin, (string?)null)
+            .SetProperty(x => x.QrToken, (string?)null)
+            .SetProperty(x => x.PinExpiresAt, (DateTime?)null));
+        if (done == 0) return Fail("meeting_done");
+        await db.Entry(m).ReloadAsync();
 
-        await game.AddCoinsAsync(m.MentorId, MentorReward, "meeting");
-        await game.AddCoinsAsync(m.StudentId, StudentReward, "meeting");
+        // монети — не частіше одного разу на добу для тієї ж пари; у рівноправних чатах (Seznamka) обом як студенту
+        var conn = m.ConnectionId != null ? await db.Connections.FindAsync(m.ConnectionId.Value) : null;
+        var rewardedToday = await db.Meetings.AnyAsync(x => x.Id != m.Id && x.MentorId == m.MentorId && x.StudentId == m.StudentId
+            && x.Status == "completed" && x.CompletedAt > now.AddDays(-1));
+        var mentorCoins = rewardedToday ? 0 : conn?.Origin == "match" ? StudentReward : MentorReward;
+        var studentCoins = rewardedToday ? 0 : StudentReward;
+        if (mentorCoins > 0) await game.AddCoinsAsync(m.MentorId, mentorCoins, "meeting");
+        if (studentCoins > 0) await game.AddCoinsAsync(m.StudentId, studentCoins, "meeting");
         if (m.ConnectionId != null) await connections.SystemMessageAsync(m.ConnectionId.Value, "meeting_done", new { id = m.Id });
-        await notify.NotifyAsync(m.MentorId, "meeting_completed", new { coins = MentorReward }, "/wallet");
-        await notify.NotifyAsync(m.StudentId, "meeting_completed", new { coins = StudentReward }, $"/meetings/{m.Id}");
+        await notify.NotifyAsync(m.MentorId, "meeting_completed", new { coins = mentorCoins }, "/wallet");
+        await notify.NotifyAsync(m.StudentId, "meeting_completed", new { coins = studentCoins }, $"/meetings/{m.Id}");
         await game.CheckAchievementsAsync(m.MentorId);
         await game.CheckAchievementsAsync(m.StudentId);
-        return Ok(new { ok = true, coins = MentorReward });
+        return Ok(new { ok = true, coins = mentorCoins });
     }
 
     [HttpPost("{id:int}/cancel")]

@@ -14,7 +14,7 @@ public class HomeworkController(AppDbContext db, SosService sos) : ApiBase
         var q = db.Homeworks.Where(h => h.UserId == Me);
         if (status is "open" or "done") q = q.Where(h => h.Status == status);
         var list = await q.ToListAsync();
-        // Поточні — за дедлайном, завершені — від нових до старих
+        // активні за дедлайном, завершені від нових
         return Ok(list.OrderBy(h => h.Status == "done").ThenBy(h => h.Status == "done" ? -(h.CompletedAt ?? h.Deadline).Ticks : h.Deadline.Ticks));
     }
 
@@ -69,7 +69,7 @@ public class HomeworkController(AppDbContext db, SosService sos) : ApiBase
         return Ok(new { ok = true });
     }
 
-    // Перетворити домашнє завдання на SOS-запит
+    // зробити з домашки SOS
     [HttpPost("{id:int}/sos")]
     public async Task<IActionResult> ToSos(int id)
     {
@@ -114,14 +114,15 @@ public class SosController(AppDbContext db, SosService sos, NotificationService 
         });
     }
 
-    // Стрічка ментора: активні запити (спершу з предметів, з якими він допомагає)
+    // запити для ментора, спочатку його предмети
     [HttpGet("active")]
     public async Task<IActionResult> Active()
     {
         var me = await db.Users.Include(u => u.HelpSubjects).FirstAsync(u => u.Id == Me);
         var blocked = await db.Blocks.Where(b => b.BlockerId == Me || b.BlockedId == Me).Select(b => b.BlockerId == Me ? b.BlockedId : b.BlockerId).ToListAsync();
         var mySubjects = me.HelpSubjects.Select(s => s.Id).ToHashSet();
-        var list = await db.SosRequests.Where(r => r.Status == "active" && r.StudentId != Me && !blocked.Contains(r.StudentId)).ToListAsync();
+        var sameWorld = db.Users.Where(u => u.IsDemo == me.IsDemo).Select(u => u.Id);
+        var list = await db.SosRequests.Where(r => r.Status == "active" && r.StudentId != Me && !blocked.Contains(r.StudentId) && sameWorld.Contains(r.StudentId)).ToListAsync();
         list = list.OrderByDescending(r => mySubjects.Contains(r.SubjectId)).ThenByDescending(r => r.CreatedAt).ToList();
         return Ok(await Shape(list));
     }
@@ -133,7 +134,7 @@ public class SosController(AppDbContext db, SosService sos, NotificationService 
         return Ok(await Shape(list));
     }
 
-    // Ментор бере запит → створюється (або оживає) звʼязок і чат
+    // ментор бере запит, створюємо чат
     [HttpPost("{id:int}/accept")]
     public async Task<IActionResult> Accept(int id)
     {
@@ -141,13 +142,19 @@ public class SosController(AppDbContext db, SosService sos, NotificationService 
         if (me!.Role != "mentor") return Fail("mentor_only", 403);
         if (!me.IsSchoolApproved) return Fail("not_approved", 403);
         var r = await db.SosRequests.FindAsync(id);
-        if (r == null) return Fail("not_found", 404);
+        if (r == null || r.StudentId == Me) return Fail("not_found", 404);
+        // демо-ментори не можуть писати реальним учням і навпаки
+        if (!await db.Users.AnyAsync(u => u.Id == r.StudentId && u.IsDemo == me.IsDemo)) return Fail("not_found", 404);
         if (r.Status != "active") return Fail("sos_taken", 409);
 
-        r.Status = "accepted";
-        r.MentorId = Me;
-        r.AcceptedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
+        // атомарно: з двох менторів, що натиснули одночасно, запит отримає лише один
+        var now = DateTime.UtcNow;
+        var taken = await db.SosRequests.Where(x => x.Id == id && x.Status == "active").ExecuteUpdateAsync(s => s
+            .SetProperty(x => x.Status, "accepted")
+            .SetProperty(x => x.MentorId, Me)
+            .SetProperty(x => x.AcceptedAt, now));
+        if (taken == 0) return Fail("sos_taken", 409);
+        await db.Entry(r).ReloadAsync();
 
         var conn = await connections.EnsureActiveAsync(r.StudentId, Me, "sos");
         var subject = await db.Subjects.FindAsync(r.SubjectId);
@@ -163,9 +170,14 @@ public class SosController(AppDbContext db, SosService sos, NotificationService 
     {
         var r = await db.SosRequests.FirstOrDefaultAsync(x => x.Id == id && (x.StudentId == Me || x.MentorId == Me));
         if (r == null) return Fail("not_found", 404);
-        r.Status = "resolved";
-        await db.SaveChangesAsync();
-        if (r.MentorId != null && r.StudentId == Me) await game.AddCoinsAsync(r.MentorId.Value, 20, "sos_help");
+        if (r.Status is not ("active" or "accepted")) return Fail("invalid");
+        // монети ментору — лише раз, при переході accepted → resolved, і лише коли закриває студент
+        var wasAccepted = r.Status == "accepted";
+        var changed = await db.SosRequests.Where(x => x.Id == id && x.Status == r.Status)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, "resolved"));
+        if (changed == 0) return Fail("invalid", 409);
+        await db.Entry(r).ReloadAsync();
+        if (wasAccepted && r.MentorId != null && r.StudentId == Me) await game.AddCoinsAsync(r.MentorId.Value, 20, "sos_help");
         return Ok(r);
     }
 
@@ -185,8 +197,7 @@ public class SosService(AppDbContext db, NotificationService notify)
 {
     public int LastNotifiedCount { get; private set; }
 
-    // Створює SOS і сповіщає найближчих вільних менторів:
-    // спершу тих, хто допомагає з цим предметом і зараз доступний.
+    // створюємо SOS і сповіщаємо менторів (спершу тих з цим предметом)
     public async Task<SosRequest> CreateAsync(int studentId, int subjectId, int? topicId, string? topicText, string kind, string? description, int? homeworkId)
     {
         var r = new SosRequest
@@ -201,8 +212,10 @@ public class SosService(AppDbContext db, NotificationService notify)
         var student = await db.Users.FindAsync(studentId);
         var subject = await db.Subjects.FindAsync(subjectId);
         var blocked = await db.Blocks.Where(b => b.BlockerId == studentId || b.BlockedId == studentId).Select(b => b.BlockerId == studentId ? b.BlockedId : b.BlockerId).ToListAsync();
+        var studentIsDemo = student?.IsDemo ?? false;
         var mentors = await db.Users.Include(u => u.HelpSubjects)
-            .Where(u => u.Role == "mentor" && u.IsSchoolApproved && !u.IsBlocked && u.Availability != "dnd" && u.Id != studentId && !blocked.Contains(u.Id))
+            .Where(u => u.Role == "mentor" && u.IsSchoolApproved && !u.IsBlocked && u.Availability != "dnd" && u.Id != studentId && !blocked.Contains(u.Id)
+                && u.IsDemo == studentIsDemo)
             .ToListAsync();
         var targets = mentors
             .OrderByDescending(m => m.HelpSubjects.Any(s => s.Id == subjectId))

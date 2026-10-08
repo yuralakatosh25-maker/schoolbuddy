@@ -15,7 +15,7 @@ public class TagsController(AppDbContext db, Moderation moderation) : ApiBase
 
     public record CreateTag(string Name, string? Category);
 
-    // Власний тег: проходить автоматичну перевірку на стоп-слова і одразу додається до профілю
+    // свій тег: перевіряємо на погані слова і додаємо
     [HttpPost]
     public async Task<IActionResult> Create(CreateTag req)
     {
@@ -25,7 +25,7 @@ public class TagsController(AppDbContext db, Moderation moderation) : ApiBase
         if (!moderation.IsClean(raw)) return Fail("moderation");
 
         var name = "#" + raw;
-        // SQLite lower() не знає кирилиці, тому порівнюємо без урахування регістру вже в памʼяті
+        // lower() в SQLite не працює з кирилицею, тому порівнюємо в памʼяті
         var tag = (await db.Tags.ToListAsync()).FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.CurrentCultureIgnoreCase));
         if (tag == null)
         {
@@ -80,7 +80,7 @@ public class ScheduleController(AppDbContext db, ScheduleService schedule, Notif
     [AllowAnonymous]
     public IActionResult Classes() => Ok(ScheduleService.Classes);
 
-    // Розклад на тиждень (з понеділка вказаного тижня) зі змінами
+    // розклад на тиждень
     [HttpGet("week")]
     public async Task<IActionResult> Week(int offset = 0)
     {
@@ -129,6 +129,7 @@ public class ScheduleController(AppDbContext db, ScheduleService schedule, Notif
     [Authorize(Roles = "admin"), HttpPost("changes")]
     public async Task<IActionResult> AddChange(ChangeRequest req)
     {
+        if (IsDemoUser) return Fail("demo_forbidden", 403);
         if (req.Kind is not ("cancelled" or "room" or "substitute")) return Fail("invalid");
         var lesson = await db.Lessons.FirstOrDefaultAsync(l => l.Id == req.LessonId && l.Class == req.Class);
         if (lesson == null) return Fail("not_found", 404);
@@ -146,6 +147,7 @@ public class ScheduleController(AppDbContext db, ScheduleService schedule, Notif
     [Authorize(Roles = "admin"), HttpPost("exams")]
     public async Task<IActionResult> AddExam(ExamRequest req)
     {
+        if (IsDemoUser) return Fail("demo_forbidden", 403);
         var exam = new Exam { Class = req.Class, SubjectId = req.SubjectId, TopicId = req.TopicId, Date = req.Date.ToUniversalTime(), Kind = req.Kind is "exam" or "quiz" ? req.Kind : "test", Note = req.Note };
         db.Exams.Add(exam);
         await db.SaveChangesAsync();
@@ -158,21 +160,28 @@ public class ScheduleController(AppDbContext db, ScheduleService schedule, Notif
 [Route("api/announcements")]
 public class AnnouncementsController(AppDbContext db, NotificationService notify) : ApiBase
 {
+
     [HttpGet]
     public async Task<IActionResult> All(string? category = null)
     {
         var q = db.Announcements.AsQueryable();
         if (!string.IsNullOrEmpty(category)) q = q.Where(a => a.Category == category);
+        // оголошення демо-адміна бачать тільки демо-акаунти
+        if (!IsDemoUser)
+        {
+            var demoIds = db.Users.Where(u => u.IsDemo).Select(u => u.Id);
+            q = q.Where(a => a.AuthorId == null || !demoIds.Contains(a.AuthorId.Value));
+        }
         return Ok(await q.OrderByDescending(a => a.Pinned).ThenByDescending(a => a.CreatedAt).ToListAsync());
     }
 
     public record AnnouncementRequest(string Category, string? TitleUa, string? TitleCs, string? TitleEn, string? BodyUa, string? BodyCs, string? BodyEn, bool Pinned);
 
-    // Офіційний канал школи — публікує лише адміністрація
+    // оголошення школи, пише тільки адмін
     [Authorize(Roles = "admin"), HttpPost]
     public async Task<IActionResult> Create(AnnouncementRequest req)
     {
-        // Якщо переклад не заповнено — показуємо текст тією мовою, якою його написали
+        // якщо перекладу нема, беремо оригінал
         var title = req.TitleUa ?? req.TitleCs ?? req.TitleEn;
         var body = req.BodyUa ?? req.BodyCs ?? req.BodyEn;
         if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(body)) return Fail("required");
@@ -186,7 +195,8 @@ public class AnnouncementsController(AppDbContext db, NotificationService notify
         db.Announcements.Add(a);
         await db.SaveChangesAsync();
 
-        var ids = await db.Users.Where(u => !u.IsBlocked && u.Id != Me).Select(u => u.Id).ToListAsync();
+        var demo = IsDemoUser;
+        var ids = await db.Users.Where(u => !u.IsBlocked && u.Id != Me && (!demo || u.IsDemo)).Select(u => u.Id).ToListAsync();
         await notify.NotifyManyAsync(ids, "announcement", new { id = a.Id, titleUa = a.TitleUa, titleCs = a.TitleCs, titleEn = a.TitleEn, category = a.Category }, "/announcements");
         return Ok(a);
     }
@@ -196,7 +206,13 @@ public class AnnouncementsController(AppDbContext db, NotificationService notify
     [Authorize(Roles = "admin"), HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        await db.Announcements.Where(a => a.Id == id).ExecuteDeleteAsync();
+        var query = db.Announcements.Where(a => a.Id == id);
+        if (IsDemoUser)
+        {
+            var demoIds = db.Users.Where(u => u.IsDemo).Select(u => u.Id);
+            query = query.Where(a => a.AuthorId != null && demoIds.Contains(a.AuthorId.Value));
+        }
+        await query.ExecuteDeleteAsync();
         return Ok(new { ok = true });
     }
 }

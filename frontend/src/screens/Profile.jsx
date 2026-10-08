@@ -36,7 +36,8 @@ export default function Profile() {
     setScanOpen(false)
     try {
       const { id } = await api.get(`/api/users/by-qr/${encodeURIComponent(token)}`)
-      nav.push('user', { id })
+      // токен передаємо далі: ментор може додати студента лише за його QR
+      nav.push('user', { id, qr: token })
     } catch (err) { fail(err) }
   }
 

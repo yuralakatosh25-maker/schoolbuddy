@@ -9,7 +9,7 @@ import { AvailabilityDot, Avatar, Badge, Button, Chip, List, Loading, Row, Scree
 import { MatchScore } from '../components/items'
 import { MeetingPlanner } from './Meetings'
 
-export default function UserProfile({ id }) {
+export default function UserProfile({ id, qr }) {
   const { t, lang, me, subjects, fail, toast, ask } = useApp()
   const nav = useNav()
   const { data: p, loading, reload } = useApi(`/api/users/${id}`)
@@ -21,12 +21,13 @@ export default function UserProfile({ id }) {
 
   const u = p.user
   const isMentor = u.role === 'mentor'
-  const canRequest = !p.isMe && !p.connection && ((isMentor && me.role === 'student') || (!isMentor && u.role === 'student' && me.role === 'mentor'))
+  // ментор додає студента лише за його QR (відкрив профіль скануванням)
+  const canRequest = !p.isMe && !p.connection && ((isMentor && me.role === 'student') || (!isMentor && u.role === 'student' && me.role === 'mentor' && !!qr))
 
   const request = async () => {
     setBusy(true)
     try {
-      const conn = await api.post('/api/connections', { mentorId: u.id })
+      const conn = await api.post('/api/connections', isMentor ? { mentorId: u.id } : { qrToken: qr })
       toast(conn.status === 'active' ? t('n_connection_accepted') : t('requestSent'))
       reload()
     } catch (e) { fail(e) } finally { setBusy(false) }

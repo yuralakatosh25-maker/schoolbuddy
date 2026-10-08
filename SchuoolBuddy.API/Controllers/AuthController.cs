@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using SchoolBuddy.API.Models;
 using SchoolBuddy.API.Services;
@@ -8,6 +9,7 @@ namespace SchoolBuddy.API.Controllers;
 
 [Route("api/auth")]
 [AllowAnonymous]
+[EnableRateLimiting("auth")]
 public class AuthController(AppDbContext db, TokenService tokens, EmailSender email, Moderation moderation,
     Gamification game, NotificationService notify, IConfiguration config, IWebHostEnvironment env) : ApiBase
 {
@@ -17,18 +19,21 @@ public class AuthController(AppDbContext db, TokenService tokens, EmailSender em
 
     public record CodeRequest(string Email);
 
-    // Крок 1: на шкільну пошту надсилається 6-значний код
+    // крок 1: шлемо код на пошту
     [HttpPost("request-code")]
     public async Task<IActionResult> RequestCode(CodeRequest req)
     {
         var mail = (req.Email ?? "").Trim().ToLowerInvariant();
         if (!System.Text.RegularExpressions.Regex.IsMatch(mail, @"^[a-z0-9._%+\-]+@[a-z0-9.\-]+$")) return Fail("email_invalid");
         if (!mail.EndsWith("@" + Domain)) return Fail("email_domain");
-        // Без пошти і без режиму розробки код нікуди доставити — вхід поштою недоступний
+        // без пошти код нікуди слати
         if (!email.IsConfigured && !ShowDevCode) return Fail("email_unavailable", 503);
 
         var recent = await db.EmailCodes.Where(c => c.Email == mail && !c.Used).OrderByDescending(c => c.Id).FirstOrDefaultAsync();
         if (recent != null && recent.ExpiresAt > DateTime.UtcNow.AddMinutes(9).AddSeconds(30)) return Fail("too_many_requests", 429);
+        // не більше 10 кодів на годину: інакше код можна підбирати, щоразу беручи новий після 5 спроб
+        var lastHour = await db.EmailCodes.CountAsync(c => c.Email == mail && c.ExpiresAt > DateTime.UtcNow.AddMinutes(-50));
+        if (lastHour >= 10) return Fail("too_many_codes", 429);
         await db.EmailCodes.Where(c => c.Email == mail && !c.Used).ExecuteUpdateAsync(s => s.SetProperty(c => c.Used, true));
 
         var code = Codes.Digits(6);
@@ -38,26 +43,25 @@ public class AuthController(AppDbContext db, TokenService tokens, EmailSender em
         await db.SaveChangesAsync();
 
         var exists = await db.Users.AnyAsync(u => u.Email == mail);
-        // Без SMTP код показується прямо в інтерфейсі, щоб можна було увійти локально
+        // без SMTP показуємо код на екрані (для локального тесту)
         return Ok(new { isNew = !exists, devCode = ShowDevCode ? code : null });
     }
 
     public record VerifyRequest(string Email, string Code, string? Role, string? Nickname, bool Consent, string? InviteCode, string? Class, string? Lang);
 
-    // Крок 2: перевірка коду → вхід або створення акаунта
+    // крок 2: перевіряємо код, входимо або створюємо акаунт
     [HttpPost("verify")]
     public async Task<IActionResult> Verify(VerifyRequest req)
     {
         var mail = (req.Email ?? "").Trim().ToLowerInvariant();
         var entry = await db.EmailCodes.Where(c => c.Email == mail && !c.Used).OrderByDescending(c => c.Id).FirstOrDefaultAsync();
         if (entry == null || entry.ExpiresAt < DateTime.UtcNow) return Fail("code_expired");
-        if (entry.Code != (req.Code ?? "").Trim())
-        {
-            entry.Attempts++;
-            if (entry.Attempts >= 5) entry.Used = true;
-            await db.SaveChangesAsync();
-            return Fail("code_invalid");
-        }
+        // спершу атомарно зараховуємо спробу, і лише потім порівнюємо: навіть паралельні запити
+        // не отримають більше 5 спроб на код
+        var counted = await db.EmailCodes.Where(c => c.Id == entry.Id && !c.Used && c.Attempts < 5)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.Attempts, c => c.Attempts + 1));
+        if (counted == 0) return Fail("code_expired");
+        if (entry.Code != (req.Code ?? "").Trim()) return Fail("code_invalid");
 
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == mail);
         var created = user == null;
@@ -96,8 +100,8 @@ public class AuthController(AppDbContext db, TokenService tokens, EmailSender em
                 if (inviter != null) user.InvitedById = inviter.Id;
             }
 
+            if (!await ConsumeAsync(entry)) return Fail("code_expired");
             db.Users.Add(user);
-            entry.Used = true;
             await db.SaveChangesAsync();
 
             if (inviter != null)
@@ -110,13 +114,18 @@ public class AuthController(AppDbContext db, TokenService tokens, EmailSender em
         else
         {
             if (user.IsBlocked) return Fail("blocked", 403);
-            entry.Used = true;
+            if (!await ConsumeAsync(entry)) return Fail("code_expired");
             user.IsEmailVerified = true;
             await db.SaveChangesAsync();
         }
 
         return Ok(new { token = tokens.Create(user), isNew = created });
     }
+
+    // код одноразовий: з двох одночасних запитів з правильним кодом пройде лише один
+    async Task<bool> ConsumeAsync(EmailCode entry) =>
+        await db.EmailCodes.Where(c => c.Id == entry.Id && !c.Used)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.Used, true)) == 1;
 
     async Task<string> UniqueInviteCode()
     {
@@ -127,7 +136,7 @@ public class AuthController(AppDbContext db, TokenService tokens, EmailSender em
         }
     }
 
-    // Публічна сторінка запрошення: schoolbuddy.cz/invite/{code}
+    // сторінка запрошення
     [HttpGet("/api/invites/{code}")]
     public async Task<IActionResult> Invite(string code)
     {
@@ -148,8 +157,8 @@ public class DemoController(AppDbContext db, TokenService tokens, DemoSeeder see
 
     public record DemoLogin(string Role);
 
-    // Demo / Test Mode: вхід у готовий тестовий акаунт без реальних персональних даних
-    [AllowAnonymous, HttpPost("login")]
+    // демо вхід (тестові акаунти). Демо-адмін бачить і змінює лише демо-дані — див. AdminController
+    [AllowAnonymous, EnableRateLimiting("auth"), HttpPost("login")]
     public async Task<IActionResult> Login(DemoLogin req)
     {
         if (!Enabled) return Fail("demo_disabled", 403);

@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using System.Text;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using SchoolBuddy.API.Controllers;
@@ -21,6 +23,9 @@ if (!builder.Environment.IsDevelopment())
 // Каталог для файлу бази (напр. /home/data на Azure, який зберігається між перезапусками)
 var connectionString = config.GetConnectionString("Default") ?? "Data Source=schoolbuddy.db";
 var usePostgres = DatabaseSetup.IsPostgres(connectionString);
+// Забутий рядок підключення на хостингу означав би тиху SQLite в контейнері, яка зникає при кожному перезапуску
+if (!builder.Environment.IsDevelopment() && connectionString.Trim() == "Data Source=schoolbuddy.db")
+    throw new InvalidOperationException("Set ConnectionStrings__Default (PostgreSQL URL, or an explicit SQLite 'Data Source=...' on a persistent disk).");
 if (!usePostgres && !builder.Environment.IsDevelopment() && !connectionString.TrimStart().StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
     throw new InvalidOperationException("ConnectionStrings__Default must be a PostgreSQL URL (postgresql://user:password@host/db) or a SQLite 'Data Source=...' string.");
 if (!usePostgres)
@@ -69,10 +74,35 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 var id = int.TryParse(ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier), out var v) ? v : 0;
                 var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id);
                 if (user == null || user.IsBlocked) ctx.Fail("user unavailable");
+                else if (user.IsDemo) ((ClaimsIdentity)ctx.Principal!.Identity!).AddClaim(new Claim("demo", "1"));
             },
         };
     });
 builder.Services.AddAuthorization();
+
+// Хостинг стоїть за проксі: справжня IP клієнта — у X-Forwarded-For (потрібно для лімітів за IP)
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.KnownIPNetworks.Clear();
+    o.KnownProxies.Clear();
+});
+
+// Ліміти запитів за IP: вхід/коди, демо-вхід і каса партнера
+static RateLimitPartition<string> PerIp(HttpContext http, int permits) =>
+    RateLimitPartition.GetFixedWindowLimiter(http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = permits, Window = TimeSpan.FromMinutes(1) });
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.OnRejected = (ctx, ct) => new ValueTask(ctx.HttpContext.Response.WriteAsJsonAsync(new { error = "too_many_requests" }, ct));
+    o.AddPolicy("auth", http => PerIp(http, 30)); // ціла школа може сидіти за однією IP; від підбору коду захищають ліміти на пошту
+    o.AddPolicy("partner", http => PerIp(http, 60));
+    // підтвердження зустрічі PIN-кодом: 5 спроб на хвилину на користувача — PIN не підібрати за 10 хв його життя
+    o.AddPolicy("pin", http => RateLimitPartition.GetFixedWindowLimiter(
+        http.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(1) }));
+});
 
 builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles);
@@ -116,17 +146,24 @@ using (var scope = app.Services.CreateScope())
     var seeder = scope.ServiceProvider.GetRequiredService<DemoSeeder>();
     await seeder.SeedReferenceAsync();
     await seeder.SyncRewardsAsync();
-    await seeder.EnsureTimelineAsync();
-    if (config.GetValue("Demo:Enabled", true)) await seeder.SeedDemoAsync();
+    // демо-розклад (контрольні, заміни) — тільки в демо-режимі
+    if (config.GetValue("Demo:Enabled", true))
+    {
+        await seeder.EnsureTimelineAsync();
+        await seeder.SeedDemoAsync();
+    }
 }
 
+app.UseForwardedHeaders();
 app.UseCors("Frontend");
 
 // Зібраний фронтенд (wwwroot) роздається тим самим сервером
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
+// автентифікація перед лімітером: ліміт PIN рахується на користувача, а не на всю шкільну IP
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 app.MapControllers();
 app.MapGet("/api/health", () => Results.Ok(new { ok = true }));

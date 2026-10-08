@@ -41,7 +41,7 @@ public class ReminderService(IServiceScopeFactory scopes, ILogger<ReminderServic
             await notify.NotifyAsync(m.MentorId, "meeting_reminder", new { name = names.GetValueOrDefault(m.StudentId), at = m.ScheduledAt }, $"/meetings/{m.Id}");
         }
 
-        // Зустріч минула, але не підтверджена PIN/QR
+        // зустріч була, але не підтверджена
         var unconfirmed = await db.Meetings.Where(m => m.Status == "scheduled" && m.ScheduledAt < nowUtc.AddMinutes(-15) && m.ScheduledAt > nowUtc.AddDays(-2)).ToListAsync();
         foreach (var m in unconfirmed)
         {
@@ -53,7 +53,7 @@ public class ReminderService(IServiceScopeFactory scopes, ILogger<ReminderServic
         var usersByClass = (await db.Users.Where(u => u.Class != null && !u.IsBlocked).Select(u => new { u.Id, u.Class }).ToListAsync())
             .GroupBy(u => u.Class!).ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList());
 
-        // Уроки, що починаються протягом 10 хвилин (місцевий час школи)
+        // уроки, що почнуться за 10 хвилин
         var now = DateTime.Now;
         var dow = (int)now.DayOfWeek;
         if (dow is >= 1 and <= 5)

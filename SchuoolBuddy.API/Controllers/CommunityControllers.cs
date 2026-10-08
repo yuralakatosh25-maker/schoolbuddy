@@ -8,10 +8,14 @@ namespace SchoolBuddy.API.Controllers;
 [Route("api/groups")]
 public class GroupsController(AppDbContext db, Moderation moderation, Gamification game) : ApiBase
 {
+    // групи демо-акаунтів і реальних користувачів не перетинаються (за автором групи)
+    IQueryable<int> World => db.Users.Where(u => u.IsDemo == IsDemoUser).Select(u => u.Id);
+    Task<bool> Visible(int id) => db.StudyGroups.AnyAsync(g => g.Id == id && World.Contains(g.CreatedById));
+
     [HttpGet]
     public async Task<IActionResult> All(string? q = null)
     {
-        var groups = await db.StudyGroups.OrderByDescending(g => g.CreatedAt).ToListAsync();
+        var groups = await db.StudyGroups.Where(g => World.Contains(g.CreatedById)).OrderByDescending(g => g.CreatedAt).ToListAsync();
         var counts = await db.GroupMembers.GroupBy(m => m.GroupId).Select(g => new { g.Key, n = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.n);
         var mine = (await db.GroupMembers.Where(m => m.UserId == Me).Select(m => m.GroupId).ToListAsync()).ToHashSet();
         if (!string.IsNullOrWhiteSpace(q)) groups = groups.Where(g => g.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || (g.Topic ?? "").Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -27,7 +31,7 @@ public class GroupsController(AppDbContext db, Moderation moderation, Gamificati
     public async Task<IActionResult> Get(int id)
     {
         var g = await db.StudyGroups.FindAsync(id);
-        if (g == null) return Fail("not_found", 404);
+        if (g == null || !await Visible(id)) return Fail("not_found", 404);
         var members = await db.GroupMembers.Where(m => m.GroupId == id).ToListAsync();
         var userIds = members.Select(m => m.UserId).ToList();
         var users = await db.Users.Where(u => userIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id);
@@ -62,7 +66,7 @@ public class GroupsController(AppDbContext db, Moderation moderation, Gamificati
     [HttpPost("{id:int}/join")]
     public async Task<IActionResult> Join(int id)
     {
-        if (!await db.StudyGroups.AnyAsync(g => g.Id == id)) return Fail("not_found", 404);
+        if (!await Visible(id)) return Fail("not_found", 404);
         if (!await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == Me))
         {
             db.GroupMembers.Add(new GroupMember { GroupId = id, UserId = Me });
@@ -132,6 +136,9 @@ public class GroupsController(AppDbContext db, Moderation moderation, Gamificati
 [Route("api/events")]
 public class EventsController(AppDbContext db, Moderation moderation, Gamification game, NotificationService notify) : ApiBase
 {
+    // події демо-акаунтів і реальних користувачів не перетинаються (за автором події)
+    IQueryable<int> World => db.Users.Where(u => u.IsDemo == IsDemoUser).Select(u => u.Id);
+
     async Task<object> Shape(Event e, Dictionary<int, int> counts, HashSet<int> mine)
     {
         var place = e.PlaceId != null ? await db.SafePlaces.FindAsync(e.PlaceId) : null;
@@ -153,9 +160,10 @@ public class EventsController(AppDbContext db, Moderation moderation, Gamificati
     public async Task<IActionResult> All(string scope = "upcoming")
     {
         var now = DateTime.UtcNow;
+        var events = db.Events.Where(e => World.Contains(e.CreatedById));
         var q = scope == "past"
-            ? db.Events.Where(e => e.StartsAt < now).OrderByDescending(e => e.StartsAt)
-            : db.Events.Where(e => e.StartsAt >= now.AddHours(-3)).OrderBy(e => e.StartsAt);
+            ? events.Where(e => e.StartsAt < now).OrderByDescending(e => e.StartsAt)
+            : events.Where(e => e.StartsAt >= now.AddHours(-3)).OrderBy(e => e.StartsAt);
         var list = await q.Take(50).ToListAsync();
         var counts = await db.EventParticipants.GroupBy(p => p.EventId).Select(g => new { g.Key, n = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.n);
         var mine = (await db.EventParticipants.Where(p => p.UserId == Me).Select(p => p.EventId).ToListAsync()).ToHashSet();
@@ -168,7 +176,7 @@ public class EventsController(AppDbContext db, Moderation moderation, Gamificati
     public async Task<IActionResult> Get(int id)
     {
         var e = await db.Events.FindAsync(id);
-        if (e == null) return Fail("not_found", 404);
+        if (e == null || !await World.ContainsAsync(e.CreatedById)) return Fail("not_found", 404);
         var parts = await db.EventParticipants.Where(p => p.EventId == id).ToListAsync();
         var ids = parts.Select(p => p.UserId).ToList();
         var users = await db.Users.Where(u => ids.Contains(u.Id)).ToDictionaryAsync(u => u.Id);
@@ -217,7 +225,7 @@ public class EventsController(AppDbContext db, Moderation moderation, Gamificati
     public async Task<IActionResult> Join(int id)
     {
         var e = await db.Events.FindAsync(id);
-        if (e == null) return Fail("not_found", 404);
+        if (e == null || !await World.ContainsAsync(e.CreatedById)) return Fail("not_found", 404);
         if (await db.EventParticipants.AnyAsync(p => p.EventId == id && p.UserId == Me)) return Ok(new { ok = true });
         if (e.Capacity != null && await db.EventParticipants.CountAsync(p => p.EventId == id) >= e.Capacity) return Fail("event_full");
         db.EventParticipants.Add(new EventParticipant { EventId = id, UserId = Me });
@@ -235,15 +243,15 @@ public class EventsController(AppDbContext db, Moderation moderation, Gamificati
 
     public record CheckInDto(string QrToken);
 
-    // Організатор сканує QR-код профілю учасника — підтвердження особи на шкільній активності
+    // організатор сканує QR учасника
     [HttpPost("{id:int}/checkin")]
     public async Task<IActionResult> CheckIn(int id, CheckInDto req)
     {
         var e = await db.Events.FindAsync(id);
         if (e == null) return Fail("not_found", 404);
-        if (e.CreatedById != Me && !IsAdmin) return Fail("forbidden", 403);
-        var user = await db.Users.FirstOrDefaultAsync(u => u.QrToken == req.QrToken.Trim());
-        if (user == null) return Fail("not_found", 404);
+        if (e.CreatedById != Me && !IsRealAdmin) return Fail("forbidden", 403);
+        var user = await db.Users.FirstOrDefaultAsync(u => u.QrToken == (req.QrToken ?? "").Trim());
+        if (user == null || user.IsDemo != IsDemoUser) return Fail("not_found", 404);
         var p = await db.EventParticipants.FirstOrDefaultAsync(x => x.EventId == id && x.UserId == user.Id);
         if (p == null)
         {
@@ -287,13 +295,24 @@ public class NotificationsController(AppDbContext db) : ApiBase
 [Route("api/forum")]
 public class ForumController(AppDbContext db, AnonHasher hasher, Moderation moderation) : ApiBase
 {
-    // Публічний псевдонім: перші 6 символів SHA-256 хешу
+    // пости демо-акаунтів бачать лише демо-акаунти, реальні — лише реальні користувачі
+    async Task<List<string>> DemoHashes() =>
+        (await db.Users.Where(u => u.IsDemo).Select(u => u.Id).ToListAsync()).Select(hasher.For).ToList();
+
+    async Task<IQueryable<ForumPost>> VisiblePosts()
+    {
+        var hashes = await DemoHashes();
+        var posts = db.ForumPosts.Where(p => !p.IsHidden);
+        return IsDemoUser ? posts.Where(p => hashes.Contains(p.AuthorHash)) : posts.Where(p => !hashes.Contains(p.AuthorHash));
+    }
+
+    // псевдонім - перші 6 символів хешу
     static string Alias(string hash) => "anon-" + hash[..6];
 
     [HttpGet]
     public async Task<IActionResult> All(string? category = null)
     {
-        var q = db.ForumPosts.Where(p => !p.IsHidden);
+        var q = await VisiblePosts();
         if (!string.IsNullOrEmpty(category)) q = q.Where(p => p.Category == category);
         var posts = await q.OrderByDescending(p => p.CreatedAt).Take(100).ToListAsync();
         var ids = posts.Select(p => p.Id).ToList();
@@ -311,7 +330,7 @@ public class ForumController(AppDbContext db, AnonHasher hasher, Moderation mode
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
-        var p = await db.ForumPosts.FirstOrDefaultAsync(x => x.Id == id && !x.IsHidden);
+        var p = await (await VisiblePosts()).FirstOrDefaultAsync(x => x.Id == id);
         if (p == null) return Fail("not_found", 404);
         var myHash = hasher.For(Me);
         var replies = await db.ForumReplies.Where(r => r.PostId == id && !r.IsHidden).OrderBy(r => r.CreatedAt).ToListAsync();
@@ -347,7 +366,7 @@ public class ForumController(AppDbContext db, AnonHasher hasher, Moderation mode
     [HttpPost("{id:int}/replies")]
     public async Task<IActionResult> Reply(int id, ReplyDto req)
     {
-        if (!await db.ForumPosts.AnyAsync(p => p.Id == id && !p.IsHidden)) return Fail("not_found", 404);
+        if (!await (await VisiblePosts()).AnyAsync(p => p.Id == id)) return Fail("not_found", 404);
         var content = (req.Content ?? "").Trim();
         if (content.Length is < 1 or > 2000) return Fail("post_length");
         if (!moderation.IsClean(content)) return Fail("moderation");
@@ -360,7 +379,7 @@ public class ForumController(AppDbContext db, AnonHasher hasher, Moderation mode
     public async Task<IActionResult> Delete(int id)
     {
         var hash = hasher.For(Me);
-        var p = await db.ForumPosts.FirstOrDefaultAsync(x => x.Id == id && (x.AuthorHash == hash || IsAdmin));
+        var p = await db.ForumPosts.FirstOrDefaultAsync(x => x.Id == id && (x.AuthorHash == hash || IsRealAdmin));
         if (p == null) return Fail("not_found", 404);
         await db.ForumReplies.Where(r => r.PostId == id).ExecuteDeleteAsync();
         db.ForumPosts.Remove(p);

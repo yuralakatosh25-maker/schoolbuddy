@@ -19,19 +19,38 @@ public class Gamification(AppDbContext db, NotificationService notify)
         ("TEAM_PLAYER", 30),
     ];
 
-    // Прогресивна шкала ментора: кількість приведених/закріплених новачків → рівень партнерських бонусів
+    // скільки новачків треба привести для рівня
     public static readonly int[] TierThresholds = [0, 3, 10, 25]; // Bronze, Silver, Gold, Platinum
 
-    // Звання за спільні активності (події + підтверджені зустрічі)
+    // звання за події і зустрічі
     static readonly (int min, string code)[] Titles = [(20, "legend"), (10, "captain"), (5, "squad"), (2, "teammate"), (0, "rookie")];
 
-    public async Task AddCoinsAsync(int userId, int amount, string reason, int? partnerId = null, int? rewardId = null, int? purchaseAmount = null)
+    public async Task AddCoinsAsync(int userId, int amount, string reason, int? partnerId = null, int? rewardId = null, int? purchaseAmount = null) =>
+        await ChangeCoinsAsync(userId, amount, null, reason, partnerId, rewardId, purchaseAmount);
+
+    // списання: атомарно, тільки якщо вистачає балансу (два одночасні запити не спишуть двічі)
+    public Task<bool> TrySpendCoinsAsync(int userId, int cost, string reason, int? partnerId = null, int? rewardId = null, int? purchaseAmount = null) =>
+        ChangeCoinsAsync(userId, -cost, cost, reason, partnerId, rewardId, purchaseAmount);
+
+    // баланс змінюємо одним UPDATE у базі, а не "прочитав — змінив — записав"
+    async Task<bool> ChangeCoinsAsync(int userId, int amount, int? minBalance, string reason, int? partnerId, int? rewardId, int? purchaseAmount)
     {
-        var user = await db.Users.FindAsync(userId);
-        if (user == null) return;
-        user.Coins += amount;
+        var query = db.Users.Where(u => u.Id == userId);
+        if (minBalance != null) query = query.Where(u => u.Coins >= minBalance);
+        var rows = await query.ExecuteUpdateAsync(s => s.SetProperty(u => u.Coins, u => u.Coins + amount));
+        if (rows == 0) return false;
+        // синхронізуємо вже завантажений обʼєкт, щоб SaveChanges не перезаписав баланс старим значенням
+        if (db.Users.Local.FirstOrDefault(u => u.Id == userId) is { } tracked)
+        {
+            var coins = db.Entry(tracked).Property(u => u.Coins);
+            var updated = tracked.Coins + amount;
+            coins.OriginalValue = updated;
+            coins.CurrentValue = updated;
+            coins.IsModified = false;
+        }
         db.CoinTransactions.Add(new CoinTransaction { UserId = userId, Amount = amount, Reason = reason, PartnerId = partnerId, RewardId = rewardId, PurchaseAmount = purchaseAmount });
         await db.SaveChangesAsync();
+        return true;
     }
 
     public async Task<UserStats> StatsAsync(int userId)
@@ -53,7 +72,7 @@ public class Gamification(AppDbContext db, NotificationService notify)
         return new UserStats(helped, meetings, events, groups, invited, joint, title, tier, brought, next);
     }
 
-    // Перевіряє умови всіх досягнень і видає ті, яких ще немає (з монетами та сповіщенням).
+    // перевіряємо всі досягнення і видаємо нові
     public async Task CheckAchievementsAsync(int userId)
     {
         var user = await db.Users.FindAsync(userId);
@@ -85,7 +104,7 @@ public class Gamification(AppDbContext db, NotificationService notify)
         }
     }
 
-    // Лічильник щоденної активності: +1 якщо вчора був активний, інакше скидаємо до 1.
+    // streak: +1 якщо був вчора, інакше знову 1
     public async Task TouchStreakAsync(User user)
     {
         var today = DateTime.Now.Date;

@@ -6,7 +6,7 @@ using SchoolBuddy.API.Services;
 
 namespace SchoolBuddy.API.Controllers;
 
-// Гаманець Buddy Coins, прогресивна шкала й партнерські бонуси
+// гаманець з монетами
 [Route("api/wallet")]
 public class WalletController(AppDbContext db, Gamification game) : ApiBase
 {
@@ -16,7 +16,8 @@ public class WalletController(AppDbContext db, Gamification game) : ApiBase
         var me = await db.Users.FindAsync(Me);
         var stats = await game.StatsAsync(Me);
         var tx = await db.CoinTransactions.Where(t => t.UserId == Me).OrderByDescending(t => t.Id).Take(40).ToListAsync();
-        var partners = await db.Partners.Where(p => p.Status != "pending").ToDictionaryAsync(p => p.Id, p => p.Name);
+        var partners = (await db.Partners.Where(p => p.Status != "pending" && p.Status != "revoked").ToListAsync())
+            .Where(p => me!.IsDemo || !PartnerController.IsDemo(p)).ToDictionary(p => p.Id, p => p.Name);
         var rewards = (await db.PartnerRewards.OrderBy(r => r.MinTier).ThenBy(r => r.Cost).ToListAsync()).Where(r => partners.ContainsKey(r.PartnerId)).ToList();
         return Ok(new
         {
@@ -38,24 +39,33 @@ public class WalletController(AppDbContext db, Gamification game) : ApiBase
     }
 }
 
-// API для партнерських закладів: автентифікація заголовком X-Partner-Key.
-// Заклад реєструється сам (статус "pending"), адмін школи схвалює його — лише після цього він бачить касу й додає пропозиції.
+// API для партнерів (заголовок X-Partner-Key).
+// Партнер реєструється сам (pending), потім адмін його схвалює
 [Route("api/partner")]
+[Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("partner")]
 [AllowAnonymous]
-public class PartnerController(AppDbContext db, Gamification game, NotificationService notify) : ApiBase
+public class PartnerController(AppDbContext db, Gamification game, NotificationService notify, IConfiguration config) : ApiBase
 {
     static readonly string[] Kinds = ["cafe", "cyberclub", "shop", "sport", "other"];
     static readonly System.Text.RegularExpressions.Regex EmailRe = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$");
 
+    // демо-партнер: засіяний з публічним ключем або схвалений демо-адміном.
+    // Він бачить і списує монети тільки в демо-акаунтів
+    public static bool IsDemo(Partner p) => p.Status == "demo" || p.ApiKey.EndsWith("-demo-key");
+
     async Task<Partner?> Auth()
     {
         var key = Request.Headers["X-Partner-Key"].ToString();
-        return string.IsNullOrEmpty(key) ? null : await db.Partners.FirstOrDefaultAsync(p => p.ApiKey == key);
+        if (string.IsNullOrEmpty(key)) return null;
+        var p = await db.Partners.FirstOrDefaultAsync(p => p.ApiKey == key);
+        if (p == null || p.Status == "revoked") return null;
+        if (IsDemo(p) && !config.GetValue("Demo:Enabled", true)) return null;
+        return p;
     }
 
     public record RegisterDto(string Name, string Kind, string Address, string ContactEmail);
 
-    // Самореєстрація підприємця: ключ показується один раз у відповіді
+    // реєстрація партнера, ключ показуємо один раз
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterDto req)
     {
@@ -82,7 +92,7 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         return Ok(new { p.Id, p.Name, p.Kind, p.Address, p.ContactEmail, p.Status, rewards });
     }
 
-    // Сканування QR-коду ментора: показуємо нікнейм, баланс і рівень
+    // скан QR ментора
     [HttpGet("customer/{qr}")]
     public async Task<IActionResult> Customer(string qr)
     {
@@ -90,14 +100,14 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         if (p == null) return Fail("partner_key", 401);
         if (p.Status == "pending") return Fail("partner_pending", 403);
         var u = await db.Users.FirstOrDefaultAsync(x => x.QrToken == qr.Trim());
-        if (u == null || u.IsBlocked) return Fail("not_found", 404);
+        if (u == null || u.IsBlocked || (IsDemo(p) && !u.IsDemo)) return Fail("not_found", 404);
         var stats = await game.StatsAsync(u.Id);
         return Ok(new { u.Nickname, u.Avatar, u.Role, coins = u.Coins, tier = stats.Tier, verified = u.IsSchoolApproved });
     }
 
     public record RewardDto(string Title, int Cost, int MinTier);
 
-    // Пропозиція партнера: знижка за бали, що діє лише разом із покупкою
+    // пропозиція партнера (знижка за бали)
     [HttpPost("rewards")]
     public async Task<IActionResult> AddReward(RewardDto req)
     {
@@ -122,10 +132,10 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         return Ok(new { ok = true });
     }
 
-    // PurchaseAmount — сума чека в Kč: знижка діє лише при покупці, а партнер бачить, скільки клієнти витратили
+    // PurchaseAmount - сума чека в Kč
     public record RedeemDto(string QrToken, int RewardId, int PurchaseAmount);
 
-    // Списання балів за знижку + фіксація транзакції
+    // списуємо бали
     [HttpPost("redeem")]
     public async Task<IActionResult> Redeem(RedeemDto req)
     {
@@ -135,13 +145,11 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         if (req.PurchaseAmount is < 1 or > 100000) return Fail("purchase_required");
         var reward = await db.PartnerRewards.FirstOrDefaultAsync(r => r.Id == req.RewardId && r.PartnerId == p.Id);
         if (reward == null) return Fail("not_found", 404);
-        var u = await db.Users.FirstOrDefaultAsync(x => x.QrToken == req.QrToken.Trim());
-        if (u == null || u.IsBlocked) return Fail("not_found", 404);
+        var u = await db.Users.FirstOrDefaultAsync(x => x.QrToken == (req.QrToken ?? "").Trim());
+        if (u == null || u.IsBlocked || (IsDemo(p) && !u.IsDemo)) return Fail("not_found", 404);
         var stats = await game.StatsAsync(u.Id);
         if (stats.Tier < reward.MinTier) return Fail("tier_locked");
-        if (u.Coins < reward.Cost) return Fail("not_enough_coins");
-
-        await game.AddCoinsAsync(u.Id, -reward.Cost, "redeem", p.Id, reward.Id, req.PurchaseAmount);
+        if (!await game.TrySpendCoinsAsync(u.Id, reward.Cost, "redeem", p.Id, reward.Id, req.PurchaseAmount)) return Fail("not_enough_coins");
         await notify.NotifyAsync(u.Id, "coins_spent", new { amount = reward.Cost, partner = p.Name, rewardUa = reward.TitleUa, rewardCs = reward.TitleCs, rewardEn = reward.TitleEn }, "/wallet");
         return Ok(new { ok = true, balance = u.Coins });
     }
@@ -157,7 +165,7 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
         return Ok(tx.Select(t => new { t.Id, t.Amount, t.RewardId, t.PurchaseAmount, t.CreatedAt, nickname = users.GetValueOrDefault(t.UserId) }));
     }
 
-    // Звіт для підприємця: скільки клієнтів привів застосунок і на яку суму вони купили
+    // звіт для партнера
     [HttpGet("stats")]
     public async Task<IActionResult> Stats()
     {
@@ -185,8 +193,18 @@ public class PartnerController(AppDbContext db, Gamification game, NotificationS
 
 [Route("api/admin")]
 [Authorize(Roles = "admin")]
-public class AdminController(AppDbContext db, NotificationService notify) : ApiBase
+public class AdminController(AppDbContext db, NotificationService notify, AnonHasher hasher) : ApiBase
 {
+    // Демо-адмін (вхід без пароля через /api/demo/login) керує тільки демо-даними:
+    // реальних користувачів, їхні пошти, скарги, листи й пости він не бачить і не змінює
+    Task<bool> IsDemoAdmin() => Task.FromResult(IsDemoUser);
+
+    async Task<List<string>> DemoHashes() =>
+        (await db.Users.Where(u => u.IsDemo).Select(u => u.Id).ToListAsync()).Select(hasher.For).ToList();
+
+    async Task<bool> CanManage(int userId) =>
+        !await IsDemoAdmin() || await db.Users.AnyAsync(u => u.Id == userId && u.IsDemo);
+
     // Статистика активності
     [HttpGet("stats")]
     public async Task<IActionResult> Stats()
@@ -239,20 +257,40 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     [HttpGet("partners")]
     public async Task<IActionResult> Partners()
     {
+        var demo = await IsDemoAdmin();
         var list = await db.Partners.OrderByDescending(p => p.Status == "pending").ThenByDescending(p => p.Id).ToListAsync();
         var visits = await db.CoinTransactions.Where(t => t.PartnerId != null && t.Reason == "redeem")
             .GroupBy(t => t.PartnerId).Select(g => new { id = g.Key, n = g.Count() }).ToDictionaryAsync(x => x.id!.Value, x => x.n);
-        return Ok(list.Select(p => new { p.Id, p.Name, p.Kind, p.Address, p.ContactEmail, p.Status, p.CreatedAt, visits = visits.GetValueOrDefault(p.Id) }));
+        return Ok(list.Select(p => new
+        {
+            p.Id, p.Name, p.Kind, p.Address,
+            contactEmail = demo && !PartnerController.IsDemo(p) ? null : p.ContactEmail,
+            p.Status, p.CreatedAt, visits = visits.GetValueOrDefault(p.Id),
+        }));
     }
 
+    // демо-адмін схвалює лише в демо-статус: такий партнер працює тільки з демо-акаунтами
     [HttpPost("partners/{id:int}/approve")]
     public async Task<IActionResult> ApprovePartner(int id)
     {
-        await db.Partners.Where(p => p.Id == id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "approved"));
+        if (await IsDemoAdmin())
+            await db.Partners.Where(p => p.Id == id && p.Status == "pending").ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "demo"));
+        else
+            await db.Partners.Where(p => p.Id == id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "approved"));
         return Ok(new { ok = true });
     }
 
-    // Відхилення видаляє лише заявки, що чекають; активного партнера не чіпаємо
+    // відкликати партнера (напр. якщо ключ потрапив до чужих рук)
+    [HttpPost("partners/{id:int}/revoke")]
+    public async Task<IActionResult> RevokePartner(int id)
+    {
+        var query = db.Partners.Where(p => p.Id == id && p.Status != "pending");
+        if (await IsDemoAdmin()) query = query.Where(p => p.Status == "demo");
+        await query.ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "revoked"));
+        return Ok(new { ok = true });
+    }
+
+    // видаляємо тільки заявки, що чекають
     [HttpPost("partners/{id:int}/reject")]
     public async Task<IActionResult> RejectPartner(int id)
     {
@@ -264,6 +302,7 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     public async Task<IActionResult> Users(string filter = "pending", string? q = null)
     {
         var query = db.Users.AsQueryable();
+        if (await IsDemoAdmin()) query = query.Where(u => u.IsDemo);
         query = filter switch
         {
             "pending" => query.Where(u => !u.IsSchoolApproved && u.Role != "admin"),
@@ -279,7 +318,7 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     public async Task<IActionResult> Approve(int id)
     {
         var u = await db.Users.FindAsync(id);
-        if (u == null) return Fail("not_found", 404);
+        if (u == null || !await CanManage(id)) return Fail("not_found", 404);
         u.IsSchoolApproved = true;
         await db.SaveChangesAsync();
         await notify.NotifyAsync(id, "school_approved", new { }, "/profile");
@@ -290,6 +329,7 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     public async Task<IActionResult> BlockUser(int id)
     {
         if (id == Me) return Fail("invalid");
+        if (!await CanManage(id)) return Fail("not_found", 404);
         await db.Users.Where(u => u.Id == id).ExecuteUpdateAsync(s => s.SetProperty(u => u.IsBlocked, true));
         return Ok(new { ok = true });
     }
@@ -297,15 +337,22 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     [HttpPost("users/{id:int}/unblock")]
     public async Task<IActionResult> UnblockUser(int id)
     {
+        if (!await CanManage(id)) return Fail("not_found", 404);
         await db.Users.Where(u => u.Id == id).ExecuteUpdateAsync(s => s.SetProperty(u => u.IsBlocked, false));
         return Ok(new { ok = true });
     }
 
-    // Модерація форуму (включно з прихованими)
+    // модерація форуму
     [HttpGet("forum")]
     public async Task<IActionResult> Forum()
     {
-        var posts = await db.ForumPosts.OrderByDescending(p => p.CreatedAt).Take(100).ToListAsync();
+        var postsQuery = db.ForumPosts.AsQueryable();
+        if (await IsDemoAdmin())
+        {
+            var hashes = await DemoHashes();
+            postsQuery = postsQuery.Where(p => hashes.Contains(p.AuthorHash));
+        }
+        var posts = await postsQuery.OrderByDescending(p => p.CreatedAt).Take(100).ToListAsync();
         var reported = await db.Reports.Where(r => r.TargetType == "post" && r.Status == "open").GroupBy(r => r.TargetId)
             .Select(g => new { g.Key, n = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.n);
         return Ok(posts.Select(p => new { p.Id, p.Title, p.Content, p.Category, p.CreatedAt, p.IsHidden, author = "anon-" + p.AuthorHash[..6], reports = reported.GetValueOrDefault(p.Id) }));
@@ -314,14 +361,26 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     [HttpPost("forum/{id:int}/hide")]
     public async Task<IActionResult> Hide(int id, bool hidden = true)
     {
-        await db.ForumPosts.Where(p => p.Id == id).ExecuteUpdateAsync(s => s.SetProperty(p => p.IsHidden, hidden));
+        var query = db.ForumPosts.Where(p => p.Id == id);
+        if (await IsDemoAdmin())
+        {
+            var hashes = await DemoHashes();
+            query = query.Where(p => hashes.Contains(p.AuthorHash));
+        }
+        await query.ExecuteUpdateAsync(s => s.SetProperty(p => p.IsHidden, hidden));
         return Ok(new { ok = true });
     }
 
     [HttpGet("reports")]
     public async Task<IActionResult> Reports(string status = "open")
     {
-        var list = await db.Reports.Where(r => status == "all" || r.Status == status).OrderByDescending(r => r.CreatedAt).Take(100).ToListAsync();
+        var query = db.Reports.Where(r => status == "all" || r.Status == status);
+        if (await IsDemoAdmin())
+        {
+            var demoIds = db.Users.Where(u => u.IsDemo).Select(u => u.Id);
+            query = query.Where(r => demoIds.Contains(r.ReporterId));
+        }
+        var list = await query.OrderByDescending(r => r.CreatedAt).Take(100).ToListAsync();
         var reporterIds = list.Select(r => r.ReporterId).ToList();
         var userTargets = list.Where(r => r.TargetType == "user").Select(r => r.TargetId).ToList();
         var users = await db.Users.Where(u => reporterIds.Contains(u.Id) || userTargets.Contains(u.Id)).ToDictionaryAsync(u => u.Id);
@@ -348,20 +407,39 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     {
         var r = await db.Reports.FindAsync(id);
         if (r == null) return Fail("not_found", 404);
+        if (await IsDemoAdmin())
+        {
+            // демо-адмін не може блокувати реальних людей чи стирати їхні повідомлення
+            var targetUserId = r.TargetType switch
+            {
+                "user" => r.TargetId,
+                "message" => await db.Messages.Where(m => m.Id == r.TargetId).Select(m => m.SenderId).FirstOrDefaultAsync(),
+                _ => null as int?,
+            };
+            if (!await CanManage(r.ReporterId) || (targetUserId != null && !await CanManage(targetUserId.Value)))
+                return Fail("not_found", 404);
+        }
         r.Status = verb == "dismiss" ? "dismissed" : "resolved";
         r.ResolvedAt = DateTime.UtcNow;
-        // "resolve" застосовує санкцію: ховає пост або блокує користувача
+        // resolve - ховаємо пост/відповідь, блокуємо юзера, стираємо повідомлення або видаляємо групу
         if (verb == "resolve")
         {
             if (r.TargetType == "post") await db.ForumPosts.Where(p => p.Id == r.TargetId).ExecuteUpdateAsync(s => s.SetProperty(p => p.IsHidden, true));
+            if (r.TargetType == "reply") await db.ForumReplies.Where(p => p.Id == r.TargetId).ExecuteUpdateAsync(s => s.SetProperty(p => p.IsHidden, true));
             if (r.TargetType == "user") await db.Users.Where(u => u.Id == r.TargetId).ExecuteUpdateAsync(s => s.SetProperty(u => u.IsBlocked, true));
             if (r.TargetType == "message") await db.Messages.Where(m => m.Id == r.TargetId).ExecuteUpdateAsync(s => s.SetProperty(m => m.Text, "[removed]"));
+            if (r.TargetType == "group")
+            {
+                await db.Messages.Where(m => m.GroupId == r.TargetId).ExecuteDeleteAsync();
+                await db.GroupMembers.Where(m => m.GroupId == r.TargetId).ExecuteDeleteAsync();
+                await db.StudyGroups.Where(g => g.Id == r.TargetId).ExecuteDeleteAsync();
+            }
         }
         await db.SaveChangesAsync();
         return Ok(new { ok = true });
     }
 
-    // Уроки класу на певну дату — для форми зміни розкладу
+    // уроки класу на дату
     [HttpGet("lessons")]
     public async Task<IActionResult> Lessons(string @class, string date)
     {
@@ -371,6 +449,14 @@ public class AdminController(AppDbContext db, NotificationService notify) : ApiB
     }
 
     [HttpGet("outbox")]
-    public async Task<IActionResult> Outbox() =>
-        Ok(await db.Outbox.Where(o => o.Body != "******").OrderByDescending(o => o.Id).Take(50).ToListAsync());
+    public async Task<IActionResult> Outbox()
+    {
+        var query = db.Outbox.Where(o => o.Body != "******");
+        if (await IsDemoAdmin())
+        {
+            var demoEmails = db.Users.Where(u => u.IsDemo).Select(u => u.Email);
+            query = query.Where(o => demoEmails.Contains(o.Recipient));
+        }
+        return Ok(await query.OrderByDescending(o => o.Id).Take(50).ToListAsync());
+    }
 }

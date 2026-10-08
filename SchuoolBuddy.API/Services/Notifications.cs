@@ -69,8 +69,7 @@ public class EmailSender(IConfiguration config, ILogger<EmailSender> log, IHttpC
 
 public class NotificationService(AppDbContext db, EmailSender email)
 {
-    // Створює in-app сповіщення і, якщо користувач увімкнув, дублює його в email / Telegram.
-    // dedupeKey не дає надіслати те саме нагадування двічі.
+    // створюємо сповіщення (і email, якщо увімкнено). dedupeKey - щоб не дублювати
     public async Task NotifyAsync(int userId, string type, object? data = null, string? link = null, string? dedupeKey = null)
     {
         if (dedupeKey != null && await db.Notifications.AnyAsync(n => n.UserId == userId && n.DedupeKey == dedupeKey))
@@ -92,7 +91,7 @@ public class NotificationService(AppDbContext db, EmailSender email)
             }
             if (user.NotifyTelegram && !string.IsNullOrWhiteSpace(user.TelegramHandle))
             {
-                // Інтеграція з Telegram Bot API потребує токена бота й chat_id — поки що лише журналюємо.
+                // Telegram поки не зроблений, тільки пишемо в журнал
                 db.Outbox.Add(new OutboxMessage { UserId = userId, Channel = "telegram", Recipient = user.TelegramHandle!, Subject = subject, Body = body, Status = "simulated" });
             }
         }

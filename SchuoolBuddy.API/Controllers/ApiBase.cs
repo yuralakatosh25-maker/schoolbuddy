@@ -11,8 +11,12 @@ public abstract class ApiBase : ControllerBase
 {
     protected int Me => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     protected bool IsAdmin => User.IsInRole("admin");
+    // демо-акаунт (вхід без пароля): ознаку додає Program.cs при перевірці токена
+    protected bool IsDemoUser => User.HasClaim("demo", "1");
+    // справжній адмін школи, а не демо-адмін
+    protected bool IsRealAdmin => IsAdmin && !IsDemoUser;
 
-    // Помилки повертаємо кодом — фронтенд перекладає їх на мову інтерфейсу
+    // повертаємо код помилки, фронтенд сам його перекладає
     protected ObjectResult Fail(string code, int status = 400) => StatusCode(status, new { error = code });
 }
 
@@ -38,7 +42,7 @@ public static class Views
 
     public static object OfficeHour(OfficeHour o) => new { o.Id, o.DayOfWeek, o.Start, o.End, o.Mode, o.Note };
 
-    // Чи має ментор зараз години консультацій
+    // чи є зараз у ментора консультація
     public static bool InOfficeNow(IEnumerable<OfficeHour> hours)
     {
         var now = DateTime.Now;

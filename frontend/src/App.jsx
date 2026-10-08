@@ -46,7 +46,7 @@ function useProfileDeepLink() {
     const m = window.location.pathname.match(/^\/u\/([^/?#]+)/)
     if (!m) return
     window.history.replaceState({ sbDepth: 0 }, '', '/')
-    api.get(`/api/users/by-qr/${encodeURIComponent(m[1])}`).then(({ id }) => nav.push('user', { id })).catch(fail)
+    api.get(`/api/users/by-qr/${encodeURIComponent(m[1])}`).then(({ id }) => nav.push('user', { id, qr: m[1] })).catch(fail)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 }
 

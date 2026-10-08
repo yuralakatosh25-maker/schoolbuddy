@@ -84,7 +84,7 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
 
     public record RoleRequest(string Role);
 
-    // Студент може стати ментором (потрібне підтвердження школи) і навпаки
+    // змінити роль (ментора підтверджує школа)
     [HttpPut("role")]
     public async Task<IActionResult> SetRole(RoleRequest req)
     {
@@ -94,7 +94,12 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
         if (u.Role != req.Role)
         {
             u.Role = req.Role;
-            if (u.Role == "mentor" && string.IsNullOrEmpty(u.HelpFormats)) u.HelpFormats = "school,online";
+            if (u.Role == "mentor")
+            {
+                // нового ментора школа має підтвердити окремо, навіть якщо як студента його вже підтвердили
+                if (!u.IsDemo) u.IsSchoolApproved = false;
+                if (string.IsNullOrEmpty(u.HelpFormats)) u.HelpFormats = "school,online";
+            }
             await db.SaveChangesAsync();
         }
         return Ok(await Profile(u));
@@ -135,7 +140,7 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
     {
         var u = await Load();
         var nowUtc = DateTime.UtcNow;
-        // Після останнього уроку або на вихідних показуємо найближчий навчальний день
+        // після уроків або у вихідні показуємо наступний навчальний день
         var lessonsDate = DateTime.Now.Date;
         var lessons = await schedule.ForDateAsync(u.Class, lessonsDate);
         var nowHm = DateTime.Now.ToString("HH:mm");
@@ -161,7 +166,7 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
         var blocked = await BlockedIds();
         var myTags = u.Tags.Select(t => t.Id).ToHashSet();
         var mentors = await db.Users.Include(x => x.Tags)
-            .Where(x => x.Role == "mentor" && x.Id != Me && x.Availability == "available" && !x.IsBlocked && x.IsSchoolApproved)
+            .Where(x => x.Role == "mentor" && x.Id != Me && x.Availability == "available" && !x.IsBlocked && x.IsSchoolApproved && x.IsDemo == u.IsDemo)
             .ToListAsync();
         var mentorCards = mentors.Where(m => !blocked.Contains(m.Id))
             .Select(m => new { m, score = Matching.Score(myTags, m.Tags.Select(t => t.Id).ToHashSet()) })
@@ -169,10 +174,17 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
             .Select(x => new { user = Views.Card(x.m), match = x.score });
 
         var notifications = await db.Notifications.Where(n => n.UserId == Me).OrderByDescending(n => n.Id).Take(4).ToListAsync();
-        var announcements = await db.Announcements.OrderByDescending(a => a.Pinned).ThenByDescending(a => a.CreatedAt).Take(2).ToListAsync();
+        // демо- і реальні акаунти не бачать оголошень, менторів і SOS одне одного
+        var demoIds = db.Users.Where(x => x.IsDemo).Select(x => x.Id);
+        var sameWorld = db.Users.Where(x => x.IsDemo == u.IsDemo).Select(x => x.Id);
+        var annQuery = u.IsDemo
+            ? db.Announcements.Where(a => a.AuthorId == null || demoIds.Contains(a.AuthorId.Value))
+            : db.Announcements.Where(a => a.AuthorId == null || !demoIds.Contains(a.AuthorId.Value));
+        var announcements = await annQuery
+            .OrderByDescending(a => a.Pinned).ThenByDescending(a => a.CreatedAt).Take(2).ToListAsync();
 
         var sosOpen = u.Role == "mentor"
-            ? await db.SosRequests.CountAsync(r => r.Status == "active" && !blocked.Contains(r.StudentId))
+            ? await db.SosRequests.CountAsync(r => r.Status == "active" && !blocked.Contains(r.StudentId) && sameWorld.Contains(r.StudentId))
             : await db.SosRequests.CountAsync(r => r.StudentId == Me && (r.Status == "active" || r.Status == "accepted"));
 
         return Ok(new
@@ -241,7 +253,7 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
 
     // ---------- GDPR ----------
 
-    // Експорт усіх персональних даних (право на доступ)
+    // експорт даних користувача
     [HttpGet("export")]
     public async Task<IActionResult> Export()
     {
@@ -268,7 +280,7 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
         });
     }
 
-    // Право на забуття: повне видалення акаунта
+    // видалення акаунта
     [HttpDelete]
     public async Task<IActionResult> Delete()
     {
@@ -279,8 +291,7 @@ public class MeController(AppDbContext db, Gamification game, Moderation moderat
 
 public static class Matching
 {
-    // Відсоток збігу за тегами: наскільки людина покриває мої інтереси (60%)
-    // плюс загальна схожість профілів за коефіцієнтом Сьоренсена–Дайса (40%).
+    // відсоток збігу: 60% - скільки моїх тегів є в людини, 40% - схожість профілів
     public static int Score(HashSet<int> mine, HashSet<int> theirs)
     {
         if (mine.Count == 0 || theirs.Count == 0) return 0;

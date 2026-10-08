@@ -17,6 +17,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=api /app ./
 ENV ASPNETCORE_ENVIRONMENT=Production
+# Розклад, нагадування й серії рахуються за шкільним (празьким) часом, а не за UTC сервера
+ENV TZ=Europe/Prague
 # Порт бере зі змінної PORT (її задає Render), див. Program.cs
 EXPOSE 10000
 ENTRYPOINT ["dotnet", "SchuoolBuddy.API.dll"]

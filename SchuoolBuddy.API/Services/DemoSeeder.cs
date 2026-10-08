@@ -187,8 +187,10 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
     public async Task EnsureTimelineAsync()
     {
         if (await db.Exams.AnyAsync(e => e.Date > DateTime.UtcNow)) return;
-        await db.Exams.ExecuteDeleteAsync();
-        await db.ScheduleChanges.ExecuteDeleteAsync();
+        // прибираємо лише минуле: майбутні зміни розкладу, які вніс адмін, лишаються
+        var todayStr = DateTime.Now.ToString("yyyy-MM-dd");
+        await db.Exams.Where(e => e.Date <= DateTime.UtcNow).ExecuteDeleteAsync();
+        await db.ScheduleChanges.Where(c => string.Compare(c.Date, todayStr) < 0).ExecuteDeleteAsync();
 
         var days = SchoolDays(14);
         var s = await db.Subjects.Include(x => x.Topics).ToDictionaryAsync(x => x.Code);
@@ -228,7 +230,6 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
         var ids = await db.Users.Where(u => u.IsDemo).Select(u => u.Id).ToListAsync();
         foreach (var id in ids) await cleanup.DeleteAsync(id);
         db.ChangeTracker.Clear();
-        await db.Exams.ExecuteDeleteAsync();
         await EnsureTimelineAsync();
         await SeedDemoAsync();
     }

@@ -12,7 +12,7 @@ public class UsersController(AppDbContext db, Gamification game) : ApiBase
         (await db.Blocks.Where(b => b.BlockerId == Me || b.BlockedId == Me)
             .Select(b => b.BlockerId == Me ? b.BlockedId : b.BlockerId).ToListAsync()).ToHashSet();
 
-    // Миттєвий метчинг: усі користувачі, відсортовані за відсотком збігу тегів
+    // всі користувачі за збігом тегів
     [HttpGet("match")]
     public async Task<IActionResult> Match(string role = "mentor", string? q = null, int? subjectId = null)
     {
@@ -25,7 +25,7 @@ public class UsersController(AppDbContext db, Gamification game) : ApiBase
             .ToListAsync();
 
         var query = db.Users.Include(u => u.Tags).Include(u => u.HelpSubjects)
-            .Where(u => u.Id != Me && !u.IsBlocked && u.Role != "admin");
+            .Where(u => u.Id != Me && !u.IsBlocked && u.Role != "admin" && u.IsDemo == me.IsDemo);
         if (role is "mentor" or "student") query = query.Where(u => u.Role == role);
         var users = await query.ToListAsync();
 
@@ -62,14 +62,17 @@ public class UsersController(AppDbContext db, Gamification game) : ApiBase
         return Ok(result);
     }
 
-    // Розширений профіль (для менторів — з предметами, годинами, бейджами)
+    // повний профіль
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Profile(int id)
     {
         var u = await db.Users.Include(x => x.Tags).Include(x => x.HelpSubjects).FirstOrDefaultAsync(x => x.Id == id);
-        if (u == null || (u.IsBlocked && !IsAdmin)) return Fail("not_found", 404);
+        if (u == null || (u.IsBlocked && !IsRealAdmin)) return Fail("not_found", 404);
 
         var me = await db.Users.Include(x => x.Tags).FirstAsync(x => x.Id == Me);
+        // хто заблокував мене, того профіль я не бачу; демо й реальні акаунти одне одного теж
+        if (!IsRealAdmin && (u.IsDemo != me.IsDemo || await db.Blocks.AnyAsync(b => b.BlockerId == id && b.BlockedId == Me)))
+            return Fail("not_found", 404);
         var stats = await game.StatsAsync(id);
         var hours = await db.OfficeHours.Where(o => o.MentorId == id).OrderBy(o => o.DayOfWeek).ThenBy(o => o.Start).ToListAsync();
         var conn = await db.Connections.Where(c => ((c.StudentId == Me && c.MentorId == id) || (c.MentorId == Me && c.StudentId == id)) && c.Status != "declined")
@@ -101,7 +104,7 @@ public class UsersController(AppDbContext db, Gamification game) : ApiBase
     public async Task<IActionResult> ByQr(string token)
     {
         var u = await db.Users.FirstOrDefaultAsync(x => x.QrToken == token.Trim());
-        if (u == null || u.IsBlocked) return Fail("not_found", 404);
+        if (u == null || u.IsBlocked || u.IsDemo != IsDemoUser) return Fail("not_found", 404);
         return Ok(new { id = u.Id });
     }
 
@@ -112,7 +115,7 @@ public class UsersController(AppDbContext db, Gamification game) : ApiBase
         if (!await db.Blocks.AnyAsync(b => b.BlockerId == Me && b.BlockedId == id))
         {
             db.Blocks.Add(new Block { BlockerId = Me, BlockedId = id });
-            // Заблокований користувач більше не бачить звʼязок
+            // заблокованому звʼязок не показуємо
             await db.Connections.Where(c => ((c.StudentId == Me && c.MentorId == id) || (c.MentorId == Me && c.StudentId == id)) && (c.Status == "active" || c.Status == "pending"))
                 .ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, "archived").SetProperty(c => c.ArchivedAt, DateTime.UtcNow));
             await db.SaveChangesAsync();
@@ -137,18 +140,44 @@ public class UsersController(AppDbContext db, Gamification game) : ApiBase
 }
 
 [Route("api/reports")]
-public class ReportsController(AppDbContext db) : ApiBase
+public class ReportsController(AppDbContext db, AnonHasher hasher) : ApiBase
 {
     public record ReportRequest(string TargetType, int TargetId, string Reason);
 
-    // Report: скарга на користувача, пост, відповідь, повідомлення чи групу
+    // скарга
     [HttpPost]
     public async Task<IActionResult> Create(ReportRequest req)
     {
         if (req.TargetType is not ("user" or "post" or "reply" or "message" or "group")) return Fail("invalid");
         if (string.IsNullOrWhiteSpace(req.Reason)) return Fail("required");
+        if (!await CanReportAsync(req.TargetType, req.TargetId)) return Fail("not_found", 404);
         db.Reports.Add(new Report { ReporterId = Me, TargetType = req.TargetType, TargetId = req.TargetId, Reason = req.Reason.Trim() });
         await db.SaveChangesAsync();
         return Ok(new { ok = true });
+    }
+
+    // скаржитися можна лише на те, що користувач справді бачить: інакше через скарги
+    // (і їхній перегляд в адмінці) можна було б читати чужі повідомлення за id
+    async Task<bool> CanReportAsync(string type, int id)
+    {
+        var world = db.Users.Where(u => u.IsDemo == IsDemoUser).Select(u => u.Id);
+        switch (type)
+        {
+            case "user":
+                return await world.ContainsAsync(id);
+            case "message":
+                var m = await db.Messages.FirstOrDefaultAsync(x => x.Id == id);
+                if (m == null) return false;
+                if (m.ConnectionId != null)
+                    return await db.Connections.AnyAsync(c => c.Id == m.ConnectionId && (c.StudentId == Me || c.MentorId == Me));
+                return m.GroupId != null && await db.GroupMembers.AnyAsync(g => g.GroupId == m.GroupId && g.UserId == Me);
+            case "group":
+                return await db.StudyGroups.AnyAsync(g => g.Id == id && world.Contains(g.CreatedById));
+            default: // post / reply
+                var hashes = (await world.ToListAsync()).Select(hasher.For).ToList();
+                return type == "post"
+                    ? await db.ForumPosts.AnyAsync(p => p.Id == id && hashes.Contains(p.AuthorHash))
+                    : await db.ForumReplies.AnyAsync(r => r.Id == id && hashes.Contains(r.AuthorHash));
+        }
     }
 }

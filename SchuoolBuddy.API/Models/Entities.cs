@@ -406,7 +406,8 @@ public class Partner
     public string Address { get; set; } = "";
     public string ApiKey { get; set; } = "";
     [MaxLength(200)] public string? ContactEmail { get; set; }
-    // "pending" — заявка підприємця чекає схвалення адміна; усе інше — активний партнер
+    // "pending" — заявка чекає схвалення; "approved" — активний; "demo" — схвалений демо-адміном (лише демо-акаунти);
+    // "revoked" — відкликаний адміном
     public string Status { get; set; } = "approved";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

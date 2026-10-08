@@ -27,6 +27,10 @@ export function QrScanner({ open, onClose, onResult, title }) {
   const videoRef = useRef(null)
   const [error, setError] = useState(false)
   const [manual, setManual] = useState('')
+  // onResult у ref: батько передає нову функцію при кожному рендері, і камера не має через це перезапускатися
+  // (інакше той самий QR зчитується знову й запит іде двічі)
+  const onResultRef = useRef(onResult)
+  useEffect(() => { onResultRef.current = onResult })
 
   useEffect(() => {
     if (!open) return
@@ -47,7 +51,7 @@ export function QrScanner({ open, onClose, onResult, title }) {
         const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' })
         if (code?.data) {
           stopped = true
-          onResult(extractToken(code.data))
+          onResultRef.current(extractToken(code.data))
           return
         }
       }
@@ -71,7 +75,7 @@ export function QrScanner({ open, onClose, onResult, title }) {
       cancelAnimationFrame(raf)
       stream?.getTracks().forEach((tr) => tr.stop())
     }
-  }, [open, onResult])
+  }, [open])
 
   return (
     <Sheet open={open} onClose={onClose} title={title ?? t('scannerTitle')}>

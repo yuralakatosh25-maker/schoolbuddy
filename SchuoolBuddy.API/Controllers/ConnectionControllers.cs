@@ -65,27 +65,38 @@ public class ConnectionsController(AppDbContext db, NotificationService notify, 
 
     public record RequestDto(int? MentorId, string? QrToken);
 
-    // Студент просить ментора (зі сторінки профілю або через QR-код)
+    // студент просить ментора
     [HttpPost]
     public async Task<IActionResult> Create(RequestDto req)
     {
         var me = await db.Users.FindAsync(Me);
         User? other = req.MentorId != null ? await db.Users.FindAsync(req.MentorId) :
             req.QrToken != null ? await db.Users.FirstOrDefaultAsync(u => u.QrToken == req.QrToken) : null;
-        if (other == null || other.Id == Me || other.IsBlocked) return Fail("not_found", 404);
+        // демо-акаунти й реальні користувачі між собою не звʼязуються
+        if (other == null || other.Id == Me || other.IsBlocked || other.IsDemo != me!.IsDemo) return Fail("not_found", 404);
         if (await db.Blocks.AnyAsync(b => (b.BlockerId == Me && b.BlockedId == other.Id) || (b.BlockerId == other.Id && b.BlockedId == Me))) return Fail("blocked", 403);
 
-        // Хто з двох ментор — визначає роль; двоє студентів чи менторів не створюють звʼязок
+        // двоє студентів або двоє менторів звʼязок не створюють
         int studentId, mentorId;
-        if (other.Role == "mentor" && me!.Role != "mentor") { studentId = Me; mentorId = other.Id; }
-        else if (me!.Role == "mentor" && other.Role != "mentor") { studentId = other.Id; mentorId = Me; }
+        if (other.Role == "mentor" && me.Role != "mentor") { studentId = Me; mentorId = other.Id; }
+        else if (me.Role == "mentor" && other.Role != "mentor") { studentId = other.Id; mentorId = Me; }
         else return Fail("roles_mismatch");
 
         var existing = await db.Connections.FirstOrDefaultAsync(c => c.StudentId == studentId && c.MentorId == mentorId && (c.Status == "active" || c.Status == "pending"));
         if (existing != null) return Ok(existing);
 
+        // ментор додає студента тільки скануванням його QR (студент поруч і згоден),
+        // і лише якщо школа підтвердила ментора та в нього є вільні місця
+        if (mentorId == Me)
+        {
+            if (req.QrToken == null) return Fail("qr_required");
+            if (!me.IsSchoolApproved) return Fail("not_approved", 403);
+            var active = await db.Connections.CountAsync(c => c.MentorId == Me && c.Status == "active" && c.Origin != "match");
+            if (active >= me.MaxStudents) return Fail("mentor_full");
+        }
+
         var origin = req.QrToken != null ? "qr" : "request";
-        // Ментор, який сам сканує QR студента, одразу створює активний звʼязок
+        // якщо ментор сам сканує QR, звʼязок одразу активний
         var conn = new Connection { StudentId = studentId, MentorId = mentorId, Origin = origin, Status = mentorId == Me ? "active" : "pending" };
         if (conn.Status == "active") conn.AcceptedAt = DateTime.UtcNow;
         db.Connections.Add(conn);
@@ -132,7 +143,7 @@ public class ConnectionsController(AppDbContext db, NotificationService notify, 
         return Ok(conn);
     }
 
-    // Архівація: завершення звʼязку зі збереженням історії та статистики
+    // архівація звʼязку
     [HttpPost("{id:int}/archive")]
     public async Task<IActionResult> Archive(int id)
     {
@@ -195,7 +206,7 @@ public class ConnectionsController(AppDbContext db, NotificationService notify, 
         conn.LastMessageAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
 
-        // Одне непрочитане сповіщення на чат, щоб не засипати дзвіночок
+        // одне сповіщення на чат, щоб не було спаму
         var otherId = conn.StudentId == Me ? conn.MentorId : conn.StudentId;
         var me = await db.Users.FindAsync(Me);
         var unread = await db.Notifications.AnyAsync(n => n.UserId == otherId && n.Type == "message_new" && !n.IsRead && n.Link == $"/chat/{id}");
@@ -232,7 +243,7 @@ public class OfficeHoursController(AppDbContext db) : ApiBase
         return await Get(Me);
     }
 
-    // Вільні 30-хвилинні слоти ментора на найближчі 7 днів (з урахуванням уже запланованих зустрічей)
+    // вільні слоти по 30 хв на 7 днів
     [HttpGet("{mentorId:int}/slots")]
     public async Task<IActionResult> Slots(int mentorId)
     {

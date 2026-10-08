@@ -22,7 +22,7 @@ public class Moderation
         ['0'] = 'o', ['1'] = 'i', ['3'] = 'e', ['4'] = 'a', ['5'] = 's', ['7'] = 't', ['@'] = 'a', ['$'] = 's',
     };
 
-    // Стоп-слова проходять ту саму нормалізацію, що й текст (й → и, ё → е тощо).
+    // стоп-слова нормалізуємо так само як текст
     static readonly string[] NormalizedStopWords = StopWords.Select(Normalize).ToArray();
 
     static string Normalize(string input)
@@ -45,7 +45,7 @@ public class Moderation
         return !NormalizedStopWords.Any(w => n.Contains(w));
     }
 
-    // Для чатів: не блокуємо повідомлення, а маскуємо слова.
+    // для чату слова замінюємо зірочками
     public string Mask(string text)
     {
         return Regex.Replace(text, @"\S+", m => IsClean(m.Value) ? m.Value : new string('*', m.Value.Length));
