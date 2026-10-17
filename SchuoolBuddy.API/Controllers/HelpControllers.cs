@@ -122,7 +122,11 @@ public class SosController(AppDbContext db, SosService sos, NotificationService 
         var blocked = await db.Blocks.Where(b => b.BlockerId == Me || b.BlockedId == Me).Select(b => b.BlockerId == Me ? b.BlockedId : b.BlockerId).ToListAsync();
         var mySubjects = me.HelpSubjects.Select(s => s.Id).ToHashSet();
         var sameWorld = db.Users.Where(u => u.IsDemo == me.IsDemo).Select(u => u.Id);
-        var list = await db.SosRequests.Where(r => r.Status == "active" && r.StudentId != Me && !blocked.Contains(r.StudentId) && sameWorld.Contains(r.StudentId)).ToListAsync();
+        var list = await db.SosRequests.AsNoTracking().Where(r => r.Status == "active" && r.StudentId != Me && !blocked.Contains(r.StudentId) && sameWorld.Contains(r.StudentId)).ToListAsync();
+        // демо-запити із сідера завжди виглядають свіжими: час показу від їхнього заданого віку, у базі нічого не змінюється
+        if (me.IsDemo)
+            foreach (var req in list)
+                if (req.Description != null && DemoSeeder.OpenDemoSosAge.TryGetValue(req.Description, out var minutesAgo)) req.CreatedAt = DateTime.UtcNow.AddMinutes(-minutesAgo);
         list = list.OrderByDescending(r => mySubjects.Contains(r.SubjectId)).ThenByDescending(r => r.CreatedAt).ToList();
         return Ok(await Shape(list));
     }

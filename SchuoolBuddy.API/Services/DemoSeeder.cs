@@ -234,20 +234,24 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
         await SeedDemoAsync();
     }
 
-    // Відкриті демо-SOS з часом «старіють»; перед демо-входом зсуваємо їх так, щоб найновіший був кілька хвилин тому
-    public async Task FreshenDemoSosAsync()
-    {
-        var demoIds = db.Users.Where(u => u.IsDemo).Select(u => u.Id);
-        var open = await db.SosRequests.Where(r => r.Status == "active" && demoIds.Contains(r.StudentId)).ToListAsync();
-        if (open.Count == 0) return;
-        var newest = open.Max(r => r.CreatedAt);
-        if (newest > DateTime.UtcNow.AddMinutes(-30)) return;
-        var shift = DateTime.UtcNow.AddMinutes(-4) - newest;
-        foreach (var r in open) r.CreatedAt += shift;
-        await db.SaveChangesAsync();
-    }
-
     const string DemoMarker = "Maska /27 – kolik je to hostů a jak spočítat rozsah adres?";
+
+    // Відкриті SOS, які ментор бачить у демо (C# · OOP студент надсилає наживо під час презентації).
+    // MinutesAgo — вік, який ментор-демо бачить завжди: SosController.Active рахує час показу від нього, у базі нічого не переписується.
+    static readonly (string Student, string Subject, string Topic, string Kind, string Text, int MinutesAgo)[] OpenDemoSos =
+    [
+        ("anna", "MATH", "Derivatives", "test", "Ve čtvrtek píšu test z derivací a nevím, kdy použít pravidlo pro složenou funkci.", 4),
+        ("dmytro", "NET", "Subnetting", "test", DemoMarker, 12),
+        ("jan", "CSHARP", "Exceptions", "question", "Co se stane s blokem finally, když v try nastane výjimka? Nechápu pořadí.", 25),
+        ("vojtech", "PYTHON", "Lists & dicts", "homework", "Mám spočítat, kolikrát se každé slovo opakuje v textu. Nevím, jak na to se slovníkem.", 40),
+        ("dmytro", "DB", "JOIN", "question", "Jaký je rozdíl mezi INNER JOIN a LEFT JOIN? Pořád mi vychází špatný počet řádků.", 70),
+        ("lucie", "WEB", "JavaScript", "homework", "Tlačítko nereaguje na kliknutí, addEventListener asi píšu špatně. Mrkne na to někdo?", 95),
+        ("lucie", "ENG", "Grammar", "test", "V pátek test z present perfect a past simple. Pořád je pletu.", 130),
+        ("anna", "CZECH", "Grammar", "question", "Jsem z Ukrajiny a nevím, kdy psát i a kdy y. Vysvětlí mi to někdo jednoduše?", 180),
+        ("jan", "PHYS", "Electricity", "homework", "Nevím, jak spočítat celkový odpor při paralelním zapojení rezistorů.", 240),
+    ];
+
+    public static readonly IReadOnlyDictionary<string, int> OpenDemoSosAge = OpenDemoSos.ToDictionary(x => x.Text, x => x.MinutesAgo);
 
     record DemoUser(string Slug, string Nick, string Role, string? Class, string[] Tags, string[] Subjects, string Langs, string Formats, string Availability, int Streak, string? Bio, bool Approved = true);
 
@@ -407,17 +411,11 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
         Meet(jOnd, At(2, "14:45"), "scheduled", null, "Cykly a pole");
 
         // SOS
+        db.SosRequests.AddRange(OpenDemoSos.Select(x => new SosRequest
+        {
+            StudentId = u[x.Student].Id, SubjectId = subjects[x.Subject].Id, TopicId = T(x.Subject, x.Topic), Kind = x.Kind, Description = x.Text, CreatedAt = Ago(x.MinutesAgo),
+        }));
         db.SosRequests.AddRange(
-            // відкриті SOS, які ментор бачить у демо (C# · OOP студент надсилає наживо під час презентації)
-            new SosRequest { StudentId = u["anna"].Id, SubjectId = subjects["MATH"].Id, TopicId = T("MATH", "Derivatives"), Kind = "test", Description = "Ve čtvrtek píšu test z derivací a nevím, kdy použít pravidlo pro složenou funkci.", CreatedAt = Ago(4) },
-            new SosRequest { StudentId = u["dmytro"].Id, SubjectId = subjects["NET"].Id, TopicId = T("NET", "Subnetting"), Kind = "test", Description = DemoMarker, CreatedAt = Ago(12) },
-            new SosRequest { StudentId = u["jan"].Id, SubjectId = subjects["CSHARP"].Id, TopicId = T("CSHARP", "Exceptions"), Kind = "question", Description = "Co se stane s blokem finally, když v try nastane výjimka? Nechápu pořadí.", CreatedAt = Ago(25) },
-            new SosRequest { StudentId = u["vojtech"].Id, SubjectId = subjects["PYTHON"].Id, TopicId = T("PYTHON", "Lists & dicts"), Kind = "homework", Description = "Mám spočítat, kolikrát se každé slovo opakuje v textu. Nevím, jak na to se slovníkem.", CreatedAt = Ago(40) },
-            new SosRequest { StudentId = u["dmytro"].Id, SubjectId = subjects["DB"].Id, TopicId = T("DB", "JOIN"), Kind = "question", Description = "Jaký je rozdíl mezi INNER JOIN a LEFT JOIN? Pořád mi vychází špatný počet řádků.", CreatedAt = Ago(70) },
-            new SosRequest { StudentId = u["lucie"].Id, SubjectId = subjects["WEB"].Id, TopicId = T("WEB", "JavaScript"), Kind = "homework", Description = "Tlačítko nereaguje na kliknutí, addEventListener asi píšu špatně. Mrkne na to někdo?", CreatedAt = Ago(95) },
-            new SosRequest { StudentId = u["lucie"].Id, SubjectId = subjects["ENG"].Id, TopicId = T("ENG", "Grammar"), Kind = "test", Description = "V pátek test z present perfect a past simple. Pořád je pletu.", CreatedAt = Ago(130) },
-            new SosRequest { StudentId = u["anna"].Id, SubjectId = subjects["CZECH"].Id, TopicId = T("CZECH", "Grammar"), Kind = "question", Description = "Jsem z Ukrajiny a nevím, kdy psát i a kdy y. Vysvětlí mi to někdo jednoduše?", CreatedAt = Ago(180) },
-            new SosRequest { StudentId = u["jan"].Id, SubjectId = subjects["PHYS"].Id, TopicId = T("PHYS", "Electricity"), Kind = "homework", Description = "Nevím, jak spočítat celkový odpor při paralelním zapojení rezistorů.", CreatedAt = Ago(240) },
             new SosRequest { StudentId = u["student"].Id, SubjectId = subjects["CSHARP"].Id, TopicId = T("CSHARP", "OOP"), Kind = "test", Description = "Abstraktní třídy vs. interface", Status = "resolved", MentorId = u["mentor"].Id, CreatedAt = Ago(60 * 24 * 10 + 5), AcceptedAt = Ago(60 * 24 * 10) },
             new SosRequest { StudentId = u["student"].Id, SubjectId = subjects["MATH"].Id, TopicId = T("MATH", "Derivatives"), Kind = "question", Description = "Правило ланцюжка для складених функцій", Status = "accepted", MentorId = u["maksym"].Id, CreatedAt = Ago(60 * 26 + 10), AcceptedAt = Ago(60 * 26) });
 

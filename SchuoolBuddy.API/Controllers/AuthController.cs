@@ -169,7 +169,6 @@ public class DemoController(AppDbContext db, TokenService tokens, DemoSeeder see
             await seeder.ResetDemoAsync();
             user = await db.Users.FirstAsync(u => u.IsDemo && u.Email == $"demo.{role}@{Domain}");
         }
-        await seeder.FreshenDemoSosAsync();
         return Ok(new { token = tokens.Create(user) });
     }
 
