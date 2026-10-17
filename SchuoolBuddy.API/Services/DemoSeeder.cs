@@ -234,6 +234,19 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
         await SeedDemoAsync();
     }
 
+    // Відкриті демо-SOS з часом «старіють»; перед демо-входом зсуваємо їх так, щоб найновіший був кілька хвилин тому
+    public async Task FreshenDemoSosAsync()
+    {
+        var demoIds = db.Users.Where(u => u.IsDemo).Select(u => u.Id);
+        var open = await db.SosRequests.Where(r => r.Status == "active" && demoIds.Contains(r.StudentId)).ToListAsync();
+        if (open.Count == 0) return;
+        var newest = open.Max(r => r.CreatedAt);
+        if (newest > DateTime.UtcNow.AddMinutes(-30)) return;
+        var shift = DateTime.UtcNow.AddMinutes(-4) - newest;
+        foreach (var r in open) r.CreatedAt += shift;
+        await db.SaveChangesAsync();
+    }
+
     const string DemoMarker = "Maska /27 – kolik je to hostů a jak spočítat rozsah adres?";
 
     record DemoUser(string Slug, string Nick, string Role, string? Class, string[] Tags, string[] Subjects, string Langs, string Formats, string Availability, int Streak, string? Bio, bool Approved = true);
