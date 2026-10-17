@@ -234,12 +234,15 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
         await SeedDemoAsync();
     }
 
+    const string DemoMarker = "Maska /27 – kolik je to hostů a jak spočítat rozsah adres?";
+
     record DemoUser(string Slug, string Nick, string Role, string? Class, string[] Tags, string[] Subjects, string Langs, string Formats, string Availability, int Streak, string? Bio, bool Approved = true);
 
     public async Task SeedDemoAsync()
     {
         var domain = config["School:EmailDomain"] ?? "infis.cz";
-        if (await db.Users.AnyAsync(u => u.IsDemo && u.Email.EndsWith("@" + domain))) return;
+        // демо-дані старішої версії (без маркерного SOS) теж перестворюємо, щоб нові запити зʼявились і на вже розгорнутій базі
+        if (await db.Users.AnyAsync(u => u.IsDemo && u.Email.EndsWith("@" + domain)) && await db.SosRequests.AnyAsync(r => r.Description == DemoMarker)) return;
         // Демо-акаунти зі старим доменом пошти видаляємо й створюємо заново
         foreach (var id in await db.Users.Where(u => u.IsDemo).Select(u => u.Id).ToListAsync()) await cleanup.DeleteAsync(id);
         db.ChangeTracker.Clear();
@@ -392,9 +395,16 @@ public class DemoSeeder(AppDbContext db, UserCleanup cleanup, Gamification game,
 
         // SOS
         db.SosRequests.AddRange(
-            new SosRequest { StudentId = u["jan"].Id, SubjectId = subjects["CSHARP"].Id, TopicId = T("CSHARP", "OOP"), Kind = "test", Description = "Zítra píšu test z dědičnosti, potřebuju rychle projít virtual/override.", CreatedAt = Ago(4) },
-            new SosRequest { StudentId = u["vojtech"].Id, SubjectId = subjects["PYTHON"].Id, TopicId = T("PYTHON", "Functions"), Kind = "homework", Description = "Nevím, jak napsat rekurzivní funkci na faktoriál.", CreatedAt = Ago(25) },
-            new SosRequest { StudentId = u["dmytro"].Id, SubjectId = subjects["NET"].Id, TopicId = T("NET", "Subnetting"), Kind = "test", Description = "Маска /27 — скільки хостів і як порахувати діапазон?", CreatedAt = Ago(70) },
+            // відкриті SOS, які ментор бачить у демо (C# · OOP студент надсилає наживо під час презентації)
+            new SosRequest { StudentId = u["anna"].Id, SubjectId = subjects["MATH"].Id, TopicId = T("MATH", "Derivatives"), Kind = "test", Description = "Ve čtvrtek píšu test z derivací a nevím, kdy použít pravidlo pro složenou funkci.", CreatedAt = Ago(4) },
+            new SosRequest { StudentId = u["dmytro"].Id, SubjectId = subjects["NET"].Id, TopicId = T("NET", "Subnetting"), Kind = "test", Description = DemoMarker, CreatedAt = Ago(12) },
+            new SosRequest { StudentId = u["jan"].Id, SubjectId = subjects["CSHARP"].Id, TopicId = T("CSHARP", "Exceptions"), Kind = "question", Description = "Co se stane s blokem finally, když v try nastane výjimka? Nechápu pořadí.", CreatedAt = Ago(25) },
+            new SosRequest { StudentId = u["vojtech"].Id, SubjectId = subjects["PYTHON"].Id, TopicId = T("PYTHON", "Lists & dicts"), Kind = "homework", Description = "Mám spočítat, kolikrát se každé slovo opakuje v textu. Nevím, jak na to se slovníkem.", CreatedAt = Ago(40) },
+            new SosRequest { StudentId = u["dmytro"].Id, SubjectId = subjects["DB"].Id, TopicId = T("DB", "JOIN"), Kind = "question", Description = "Jaký je rozdíl mezi INNER JOIN a LEFT JOIN? Pořád mi vychází špatný počet řádků.", CreatedAt = Ago(70) },
+            new SosRequest { StudentId = u["lucie"].Id, SubjectId = subjects["WEB"].Id, TopicId = T("WEB", "JavaScript"), Kind = "homework", Description = "Tlačítko nereaguje na kliknutí, addEventListener asi píšu špatně. Mrkne na to někdo?", CreatedAt = Ago(95) },
+            new SosRequest { StudentId = u["lucie"].Id, SubjectId = subjects["ENG"].Id, TopicId = T("ENG", "Grammar"), Kind = "test", Description = "V pátek test z present perfect a past simple. Pořád je pletu.", CreatedAt = Ago(130) },
+            new SosRequest { StudentId = u["anna"].Id, SubjectId = subjects["CZECH"].Id, TopicId = T("CZECH", "Grammar"), Kind = "question", Description = "Jsem z Ukrajiny a nevím, kdy psát i a kdy y. Vysvětlí mi to někdo jednoduše?", CreatedAt = Ago(180) },
+            new SosRequest { StudentId = u["jan"].Id, SubjectId = subjects["PHYS"].Id, TopicId = T("PHYS", "Electricity"), Kind = "homework", Description = "Nevím, jak spočítat celkový odpor při paralelním zapojení rezistorů.", CreatedAt = Ago(240) },
             new SosRequest { StudentId = u["student"].Id, SubjectId = subjects["CSHARP"].Id, TopicId = T("CSHARP", "OOP"), Kind = "test", Description = "Abstraktní třídy vs. interface", Status = "resolved", MentorId = u["mentor"].Id, CreatedAt = Ago(60 * 24 * 10 + 5), AcceptedAt = Ago(60 * 24 * 10) },
             new SosRequest { StudentId = u["student"].Id, SubjectId = subjects["MATH"].Id, TopicId = T("MATH", "Derivatives"), Kind = "question", Description = "Правило ланцюжка для складених функцій", Status = "accepted", MentorId = u["maksym"].Id, CreatedAt = Ago(60 * 26 + 10), AcceptedAt = Ago(60 * 26) });
 
