@@ -133,17 +133,21 @@ export function Chat({ id }) {
     }).catch(() => {})
   }, [id])
 
+  const sendingRef = useRef(false)
   const send = async (e) => {
     e?.preventDefault()
     const body = text.trim()
-    if (!body) return
+    // другий Enter, поки перший запит ще йде, не відправить повідомлення вдруге
+    if (!body || sendingRef.current) return
+    sendingRef.current = true
     setSending(true)
     try {
       const msg = await api.post(`/api/connections/${id}/messages`, { text: body })
       setText('')
       lastId.current = Math.max(lastId.current, msg.id)
-      setMessages((prev) => [...prev, msg])
-    } catch (err) { fail(err) } finally { setSending(false) }
+      // опитування могло вже підтягнути це повідомлення
+      setMessages((prev) => (prev.some((p) => p.id === msg.id) ? prev : [...prev, msg]))
+    } catch (err) { fail(err) } finally { sendingRef.current = false; setSending(false) }
   }
 
   const c = conn.data
