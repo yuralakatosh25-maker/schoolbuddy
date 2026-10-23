@@ -16,7 +16,8 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      workbox: { navigateFallbackDenylist: [/^\/api/] },
+      // prezentace je samostatná stránka (9 MB s videem): neukládat do cache a nepřebíjet ji aplikací
+      workbox: { navigateFallbackDenylist: [/^\/api/, /^\/prezentace/], globIgnores: ['prezentace/**'] },
       manifest: {
         name: 'SchoolBuddy',
         short_name: 'SchoolBuddy',
