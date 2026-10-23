@@ -167,6 +167,11 @@ app.UseRateLimiter();
 app.UseAuthorization();
 app.MapControllers();
 app.MapGet("/api/health", () => Results.Ok(new { ok = true }));
+// Prezentace pro soutěž. Adresa pod /api/ projde i přes starý service worker, který /prezentace/ ještě nezná
+var deckPath = Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "prezentace", "index.html");
+IResult Deck() => File.Exists(deckPath) ? Results.File(deckPath, "text/html; charset=utf-8") : Results.NotFound();
+app.MapGet("/api/prezentace", Deck);
+app.MapGet("/prezentace", () => Results.Redirect("/api/prezentace"));
 // Невідомі /api/... — 404, усе інше (/invite/..., /partner, /u/...) — сторінка застосунку
 app.Map("/api/{**rest}", () => Results.NotFound(new { error = "not_found" }));
 app.MapFallbackToFile("index.html");
