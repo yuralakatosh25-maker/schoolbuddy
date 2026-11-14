@@ -1,44 +1,75 @@
 # SchoolBuddy
 
-Платформа взаємного менторства для учнів SŠINFIS (Пльзень): метчинг за інтересами, SOS-допомога, розклад, домашка, зустрічі з PIN/QR, групи, події, анонімний форум, Buddy Coins, адмін-панель. Інтерфейс UA / CZ / EN, світла й темна теми, PWA.
+Webová aplikace pro vzájemné mentorství studentů SŠINFIS v Plzni: spojuje studenty, kteří potřebují pomoc, se staršími spolužáky podle předmětů a zájmů.
 
-- `frontend/` — React 19 + Vite + Tailwind 4 (подробиці в [frontend/README.md](frontend/README.md))
-- `SchuoolBuddy.API/` — ASP.NET Core 10 + EF Core (SQLite / PostgreSQL / SQL Server); у продакшні також роздає зібраний фронтенд
+Projekt vznikl ve tříčlenném týmu pro studentskou soutěž. Rozhraní je v češtině, ukrajinštině a angličtině, má světlý i tmavý motiv a funguje jako PWA.
 
-## Запуск локально
+## Funkce
+
+- **Párování a swipe**: doporučení mentorů podle předmětů a zájmů
+- **SOS pomoc**: rychlá žádost o pomoc s úkolem nebo látkou
+- **Rozvrh a domácí úkoly**
+- **Schůzky s potvrzením přes PIN nebo QR kód**
+- **Skupiny, akce a anonymní fórum** s moderací obsahu
+- **Buddy Coins**: odměny za pomoc, které lze uplatnit u partnerských podniků (partner má vlastní pokladní rozhraní)
+- **Notifikace a připomínky** (v aplikaci i e-mailem)
+- **Administrace**: oznámení, moderace, správa uživatelů
+- **Přihlášení školním e-mailem** (`@infis.cz`) s jednorázovým kódem a demo účty pro rychlou ukázku
+
+Aplikace má čtyři role: student, mentor, administrátor a partner.
+
+## Technologie
+
+C# · .NET 10 (ASP.NET Core Web API) · Entity Framework Core (SQLite / PostgreSQL / SQL Server) · JWT · React 19 · Vite · Tailwind CSS 4 · Docker · docker-compose · Render
+
+- `SchuoolBuddy.API/` je backend (ASP.NET Core 10 + EF Core). V produkci zároveň servíruje sestavený frontend.
+- `frontend/` je frontend (React 19 + Vite + Tailwind 4), podrobnosti v [frontend/README.md](frontend/README.md).
+
+## Spuštění
+
+### Docker (vše najednou)
+
+```bash
+docker compose up --build
+```
+
+Spustí SQL Server 2022 a aplikaci (frontend + API) na http://localhost:8080.
+
+### Lokálně bez Dockeru
 
 ```bash
 dotnet run --project SchuoolBuddy.API --launch-profile http
+npm --prefix frontend install
 npm --prefix frontend run dev
 ```
 
-Відкрий http://localhost:5173 (на екрані входу є демо-акаунти).
+Otevři http://localhost:5173 (na přihlašovací obrazovce jsou demo účty). Lokálně se ve výchozím stavu použije SQLite, migrace a demo data se aplikují automaticky.
 
-## База даних
+## Databáze
 
-Провайдер обирається параметром `Database:Provider` (змінна середовища `Database__Provider`): `Sqlite`, `Postgres` або `SqlServer`. Якщо його не задано, вибір іде за рядком підключення `ConnectionStrings:Default`, як і раніше: `postgresql://…` або `Host=…` → PostgreSQL, інакше SQLite.
+Poskytovatel se volí parametrem `Database:Provider` (proměnná prostředí `Database__Provider`): `Sqlite`, `Postgres` nebo `SqlServer`. Pokud není zadán, rozhoduje připojovací řetězec `ConnectionStrings:Default`: `postgresql://…` nebo `Host=…` znamená PostgreSQL, jinak SQLite.
 
-| Провайдер | Рядок підключення (приклад) | Схема |
+| Poskytovatel | Připojovací řetězec (příklad) | Schéma |
 |---|---|---|
-| `Sqlite` (за замовчуванням локально) | `Data Source=schoolbuddy.db` | міграції в `SchuoolBuddy.API/Migrations/` |
-| `Postgres` (Render + Neon) | `postgresql://user:pass@host/db` | `EnsureCreated` під час старту |
-| `SqlServer` | `Server=localhost,1433;Database=SchoolBuddy;User Id=sa;Password=…;TrustServerCertificate=True` | міграції в `SchuoolBuddy.API/Migrations/SqlServer/` |
+| `Sqlite` (výchozí lokálně) | `Data Source=schoolbuddy.db` | migrace v `SchuoolBuddy.API/Migrations/` |
+| `Postgres` (Render + Neon) | `postgresql://user:pass@host/db` | `EnsureCreated` při startu |
+| `SqlServer` | `Server=localhost,1433;Database=SchoolBuddy;User Id=sa;Password=…;TrustServerCertificate=True` | migrace v `SchuoolBuddy.API/Migrations/SqlServer/` |
 
-Міграції застосовуються автоматично під час старту API, базу SQL Server теж створять вони.
+Migrace se aplikují automaticky při startu API, databázi SQL Server vytvoří také ony.
 
-### SQL Server 2022 у Dockerі
+### SQL Server 2022 v Dockeru
 
-Потрібен Docker Desktop (або Docker Engine з Compose).
+Je potřeba Docker Desktop (nebo Docker Engine s Compose).
 
 ```bash
-# усе разом: SQL Server 2022 + застосунок (фронтенд і API) на http://localhost:8080
+# vše najednou: SQL Server 2022 + aplikace (frontend i API) na http://localhost:8080
 docker compose up --build
 
-# або лише база, а API запускаєш сам (з IDE чи терміналу)
+# nebo jen databáze, API spouštíš sám (z IDE nebo terminálu)
 docker compose up -d sqlserver
 ```
 
-Для `dotnet run` проти бази з Compose задай провайдера й рядок підключення (PowerShell):
+Pro `dotnet run` proti databázi z Compose nastav poskytovatele a připojovací řetězec (PowerShell):
 
 ```powershell
 $env:Database__Provider = "SqlServer"
@@ -46,22 +77,35 @@ $env:ConnectionStrings__Default = "Server=localhost,1433;Database=SchoolBuddy;Us
 dotnet run --project SchuoolBuddy.API --launch-profile http
 ```
 
-(у bash: `Database__Provider=SqlServer ConnectionStrings__Default="…" dotnet run --project SchuoolBuddy.API --launch-profile http`)
+(v bash: `Database__Provider=SqlServer ConnectionStrings__Default="…" dotnet run --project SchuoolBuddy.API --launch-profile http`)
 
-Пароль `sa` за замовчуванням — `SchoolBuddy_Dev123!`; інший задаєш змінною `MSSQL_SA_PASSWORD` перед `docker compose up` (SQL Server вимагає 8+ символів із великими й малими літерами та цифрами). Дані бази лежать у томі `mssql-data`; `docker compose down -v` їх видалить. Паролі й ключі в `docker-compose.yml` — лише для локальної розробки.
+Výchozí heslo `sa` je `SchoolBuddy_Dev123!`; jiné nastavíš proměnnou `MSSQL_SA_PASSWORD` před `docker compose up` (SQL Server vyžaduje alespoň 8 znaků s velkými i malými písmeny a číslicemi). Data databáze leží ve svazku `mssql-data`; `docker compose down -v` je smaže. Hesla a klíče v `docker-compose.yml` jsou jen pro lokální vývoj.
 
-### Нова міграція після зміни моделей
+### Nová migrace po změně modelů
 
-Моделі спільні, але міграції окремі для кожного провайдера, тож після зміни `Models/` додай міграцію для обох:
+Modely jsou společné, ale migrace jsou pro každého poskytovatele zvlášť, takže po změně `Models/` přidej migraci pro oba:
 
 ```bash
 cd SchuoolBuddy.API
-dotnet ef migrations add <Назва> --context AppDbContext
-dotnet ef migrations add <Назва> --context SqlServerAppDbContext --output-dir Migrations/SqlServer --namespace SchuoolBuddy.API.Migrations.SqlServer
+dotnet ef migrations add <Nazev> --context AppDbContext
+dotnet ef migrations add <Nazev> --context SqlServerAppDbContext --output-dir Migrations/SqlServer --namespace SchuoolBuddy.API.Migrations.SqlServer
 ```
 
-Для PostgreSQL міграцій немає: нові таблиці чи стовпці на Render треба дописати в SQL-блок у `Program.cs` (поруч з `EnsureCreated`).
+Pro PostgreSQL migrace nejsou: nové tabulky či sloupce na Renderu je potřeba doplnit do SQL bloku v `Program.cs` (vedle `EnsureCreated`).
 
-## Публікація
+## Nasazení
 
-Див. [DEPLOY.md](DEPLOY.md) — Render + Neon (Postgres) + Brevo, усе безкоштовно.
+Aplikace běží na Renderu (Docker image z tohoto repozitáře, PostgreSQL na Neonu, e-maily přes Brevo). Push do větve `main` spustí nové nasazení. Postup je popsaný v [DEPLOY.md](DEPLOY.md) (zatím v ukrajinštině).
+
+## Testy
+
+Automatické testy projekt zatím nemá. Aplikaci jsme testovali ručně přes demo účty pro jednotlivé role.
+
+## Moje role
+
+Jsem **Yurii Lakatosh**, vedoucí tříčlenného týmu (dále Eliška Soukupová a Simona Šimková).
+
+- Vedl jsem tým a rozděloval práci.
+- Přišel jsem s nápadem aplikace.
+- Navrhl jsem aplikaci: funkce, role uživatelů a podobu rozhraní.
+- Vyvíjeno s AI asistentem (Claude); kód jsem reviewoval, testoval a opravoval.
