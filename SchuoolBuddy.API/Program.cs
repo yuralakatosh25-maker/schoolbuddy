@@ -22,20 +22,21 @@ if (!builder.Environment.IsDevelopment())
 
 // Каталог для файлу бази (напр. /home/data на Azure, який зберігається між перезапусками)
 var connectionString = config.GetConnectionString("Default") ?? "Data Source=schoolbuddy.db";
-var usePostgres = DatabaseSetup.IsPostgres(connectionString);
+// Database:Provider = Sqlite / Postgres / SqlServer; порожньо — визначається за рядком підключення (як раніше)
+var dbProvider = DatabaseSetup.ResolveProvider(config["Database:Provider"], connectionString);
 // Забутий рядок підключення на хостингу означав би тиху SQLite в контейнері, яка зникає при кожному перезапуску
 if (!builder.Environment.IsDevelopment() && connectionString.Trim() == "Data Source=schoolbuddy.db")
-    throw new InvalidOperationException("Set ConnectionStrings__Default (PostgreSQL URL, or an explicit SQLite 'Data Source=...' on a persistent disk).");
-if (!usePostgres && !builder.Environment.IsDevelopment() && !connectionString.TrimStart().StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
-    throw new InvalidOperationException("ConnectionStrings__Default must be a PostgreSQL URL (postgresql://user:password@host/db) or a SQLite 'Data Source=...' string.");
-if (!usePostgres)
+    throw new InvalidOperationException("Set ConnectionStrings__Default (PostgreSQL URL, SQL Server connection string, or an explicit SQLite 'Data Source=...' on a persistent disk).");
+if (dbProvider == DbProvider.Sqlite && !builder.Environment.IsDevelopment() && !connectionString.TrimStart().StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("ConnectionStrings__Default must be a PostgreSQL URL (postgresql://user:password@host/db) or a SQLite 'Data Source=...' string (for SQL Server set Database__Provider=SqlServer).");
+if (dbProvider == DbProvider.Sqlite)
 {
     var dbFile = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connectionString).DataSource;
     var dbDir = Path.GetDirectoryName(Path.GetFullPath(dbFile));
     if (!string.IsNullOrEmpty(dbDir)) Directory.CreateDirectory(dbDir);
 }
 
-builder.Services.AddDbContext<AppDbContext>(options => DatabaseSetup.Configure(options, connectionString));
+builder.Services.AddAppDbContext(dbProvider, connectionString);
 
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<Moderation>();
@@ -121,9 +122,9 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    // SQLite (локально) оновлюється міграціями; для PostgreSQL схему створює EnsureCreated
-    // (міграції в проєкті написані під SQLite).
-    if (usePostgres)
+    // SQLite (Migrations/) і SQL Server (Migrations/SqlServer) оновлюються міграціями;
+    // для PostgreSQL схему створює EnsureCreated (окремих міграцій під Postgres немає).
+    if (dbProvider == DbProvider.Postgres)
     {
         db.Database.EnsureCreated();
         // EnsureCreated не додає нові таблиці до вже наявної бази — доводимо вручну
