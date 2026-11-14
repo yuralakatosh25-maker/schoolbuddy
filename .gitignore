@@ -6,6 +6,7 @@
 !/Dockerfile
 !/.dockerignore
 !/render.yaml
+!/docker-compose.yml
 !/frontend/
 !/SchuoolBuddy.API/
 

@@ -1,0 +1,41 @@
+# Локальний запуск SchoolBuddy з Microsoft SQL Server 2022 (див. README → «SQL Server»).
+#   docker compose up --build      — база + застосунок на http://localhost:8080
+#   docker compose up -d sqlserver — лише база (для `dotnet run` з IDE)
+# Тільки для розробки: паролі нижче — заглушки; на Render і далі працює Postgres за render.yaml.
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      # SQL Server вимагає складний пароль: 8+ символів, великі й малі літери, цифри або символи
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-SchoolBuddy_Dev123!}
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  app:
+    build: .
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      Database__Provider: SqlServer
+      # Базу SchoolBuddy створять міграції під час першого старту
+      ConnectionStrings__Default: Server=sqlserver,1433;Database=SchoolBuddy;User Id=sa;Password=${MSSQL_SA_PASSWORD:-SchoolBuddy_Dev123!};TrustServerCertificate=True
+      Jwt__Key: local-compose-signing-key-not-for-production-0123456789
+      Forum__Salt: local-compose-forum-salt
+      Demo__Enabled: "true"
+
+volumes:
+  mssql-data:

@@ -6,6 +6,8 @@ namespace SchoolBuddy.API.Models;
 public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+    // для підкласів під конкретний провайдер (SqlServerAppDbContext)
+    protected AppDbContext(DbContextOptions options) : base(options) { }
 
     public DbSet<User> Users => Set<User>();
     public DbSet<EmailCode> EmailCodes => Set<EmailCode>();
