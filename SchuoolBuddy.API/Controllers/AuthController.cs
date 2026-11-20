@@ -169,6 +169,13 @@ public class DemoController(AppDbContext db, TokenService tokens, DemoSeeder see
             await seeder.ResetDemoAsync();
             user = await db.Users.FirstAsync(u => u.IsDemo && u.Email == $"demo.{role}@{Domain}");
         }
+        // Демо-акаунт міг перемкнути роль у профілі ("Стати ментором"), і вона зберігалась у базі:
+        // тоді демо-студент бачив у SOS чергу ментора. Кожен демо-вхід повертає акаунту його роль.
+        if (user.Role != role)
+        {
+            user.Role = role;
+            await db.SaveChangesAsync();
+        }
         return Ok(new { token = tokens.Create(user) });
     }
 
